@@ -94,21 +94,26 @@ export default defineConfig(({ mode }) => {
       }
     },
     build: {
-      minify: 'terser',
-      terserOptions: {
-        compress: {
-          drop_console: true,
-          drop_debugger: true,
-        },
-        format: {
-          comments: false,
-        },
+      // esbuild is Vite's built-in minifier — written in Go, 10-20x faster than Terser,
+      // with identical output quality for this project's needs.
+      minify: 'esbuild',
+      target: 'es2020',
+      esbuildOptions: {
+        // Strip console.* and debugger statements from production builds
+        drop: ['console', 'debugger'],
+        // Remove comments for a smaller bundle
+        legalComments: 'none',
       },
       chunkSizeWarningLimit: 2000,
       rollupOptions: {
         output: {
+          // Split into separate cacheable chunks: when only Admin.tsx changes,
+          // browsers only re-download the 'views' chunk, not the whole vendor bundle.
           manualChunks: {
-            vendor: ['react', 'react-dom', 'lucide-react', 'xlsx', '@supabase/supabase-js'],
+            'react-core':  ['react', 'react-dom'],
+            'routing':     ['react-router-dom'],
+            'supabase':    ['@supabase/supabase-js'],
+            'ui':          ['framer-motion', 'lucide-react'],
           },
         },
       },
