@@ -100,7 +100,15 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
       onLogin(user);
     } catch (err: any) {
       console.error(err);
-      setError(err.message || "Login failed. Please check your credentials.");
+      const isNetworkError =
+        err?.message === 'Failed to fetch' ||
+        err?.message?.includes('NetworkError') ||
+        err?.name === 'TypeError';
+      setError(
+        isNetworkError
+          ? "Connection error — the server took too long to respond. Please try again in a moment."
+          : (err.message || "Login failed. Please check your credentials.")
+      );
     } finally {
       setLoading(false);
     }

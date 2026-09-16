@@ -574,6 +574,20 @@ const ArchivedClasses: React.FC = () => {
   const [students, setStudents] = useState<User[]>([]);
   const [subLoading, setSubLoading] = useState(false);
 
+  // Edit student state
+  const [isEditingStudent, setIsEditingStudent] = useState(false);
+  const [editStudentForm, setEditStudentForm] = useState({ uid: '', name: '', mobile: '', enroll: '', rollNo: '' });
+  const [editLoading, setEditLoading] = useState(false);
+
+  // Dropdown state for class cards
+  const [openDropdownId, setOpenDropdownId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handleClickOutside = () => setOpenDropdownId(null);
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, []);
+
   useEffect(() => { loadData(); }, []);
 
   const loadData = async () => {
@@ -695,6 +709,51 @@ const ArchivedClasses: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
+  const startEditStudent = (s: User) => {
+    setEditStudentForm({
+      uid: s.uid,
+      name: s.displayName,
+      mobile: s.studentData?.mobileNo || '',
+      enroll: s.studentData?.enrollmentId || '',
+      rollNo: s.studentData?.rollNo || ''
+    });
+    setIsEditingStudent(true);
+  };
+
+  const handleEditStudent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedBranch || !selectedBatch) return;
+    if (!window.confirm('Are you sure you want to update this student?')) return;
+    setEditLoading(true);
+    try {
+      await db.updateStudent(editStudentForm.uid, {
+        displayName: editStudentForm.name,
+        studentData: {
+          branchId: selectedBranch.id,
+          batchId: selectedBatch.id,
+          enrollmentId: editStudentForm.enroll,
+          rollNo: editStudentForm.rollNo,
+          mobileNo: editStudentForm.mobile
+        }
+      });
+      setIsEditingStudent(false);
+      const fresh = await db.getStudents(selectedBranch.id, selectedBatch.id);
+      setStudents(fresh);
+      alert('Student updated successfully.');
+    } catch (err: any) { alert(err.message); } finally { setEditLoading(false); }
+  };
+
+  const handleDeleteStudent = async (uid: string) => {
+    if (!selectedBranch || !selectedBatch) return;
+    if (!window.confirm('Are you sure you want to delete this student? This cannot be undone.')) return;
+    setSubLoading(true);
+    try {
+      await db.deleteUser(uid);
+      const fresh = await db.getStudents(selectedBranch.id, selectedBatch.id);
+      setStudents(fresh);
+    } catch (err: any) { alert(err.message); } finally { setSubLoading(false); }
+  };
+
   if (loading) {
     return (
       <Card>
@@ -766,35 +825,62 @@ const ArchivedClasses: React.FC = () => {
           </div>
         </Card>
       ) : !selectedBranch ? (
-        /* ===== Level 1: Archived Classes Grid ===== */
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {branches.map(br => (
             <div key={br.id} onClick={() => handleSelectBranch(br)} className="group border border-amber-200 bg-amber-50/30 p-4 rounded-xl cursor-pointer hover:shadow-lg hover:border-amber-400 flex justify-between items-center transition-all">
-              <div className="flex items-center flex-wrap gap-2">
-                <span className="font-bold text-amber-900">{br.name}</span>
-                <span className="text-[10px] font-black px-2.5 py-1 rounded-md uppercase tracking-wider bg-amber-100 text-amber-700 border border-amber-200">
-                  View Mode
-                </span>
-              </div>
-              <div className="flex items-center gap-3">
-                <div className="text-right hidden md:block">
-                  <div className="text-[10px] font-bold text-slate-500">{batchCounts[br.id] || 0} batches · {studentCounts[br.id] || 0} students</div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center flex-wrap gap-1.5 mb-1">
+                  <span className="font-bold text-amber-900">{br.name}</span>
                 </div>
-                <button
-                  onClick={(e) => { e.stopPropagation(); handleRestore(br.id, br.name); }}
-                  disabled={restoring === br.id}
-                  className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-[10px] font-bold uppercase tracking-wider hover:bg-emerald-100 transition-all disabled:opacity-50"
-                >
-                  {restoring === br.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
-                  Restore
-                </button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); handleDeleteComplete(br.id, br.name); }}
-                  className="flex items-center justify-center p-1.5 bg-rose-50 text-rose-600 border border-rose-200 rounded-lg hover:bg-rose-100 transition-all"
-                  title="Permanently Delete Class"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
+                <div className="flex items-center flex-wrap gap-1.5">
+                  <span className="text-[10px] font-black px-2 py-0.5 rounded-md uppercase tracking-wider bg-amber-100 text-amber-700 border border-amber-200">View Mode</span>
+                  {br.hide_from_teacher_student && <span className="text-[10px] font-black px-2 py-0.5 rounded-md uppercase tracking-wider bg-rose-100 text-rose-700 border border-rose-200">Hidden T/S</span>}
+                  {br.hide_from_coordinator && <span className="text-[10px] font-black px-2 py-0.5 rounded-md uppercase tracking-wider bg-purple-100 text-purple-700 border border-purple-200">Hidden Coord</span>}
+                  <span className="text-[10px] text-slate-400 font-bold">{batchCounts[br.id] || 0}b · {studentCounts[br.id] || 0}s</span>
+                </div>
+              </div>
+              <div className="flex items-center gap-1 flex-shrink-0" onClick={e => e.stopPropagation()}>
+                {/* Three-dot dropdown */}
+                <div className="relative">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setOpenDropdownId(openDropdownId === br.id ? null : br.id); }}
+                    className="p-2 text-slate-400 hover:text-amber-700 rounded-full hover:bg-amber-50 transition-colors focus:outline-none"
+                  >
+                    <MoreVertical className="h-5 w-5" />
+                  </button>
+                  {openDropdownId === br.id && (
+                    <div className="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-2xl border border-slate-100 z-50 overflow-hidden origin-top-right">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setOpenDropdownId(null); if (confirm(`${br.hide_from_teacher_student ? 'Show' : 'Hide'} "${br.name}" from Teachers & Students?`)) { db.updateBranchHideTeacherStudent(br.id, !br.hide_from_teacher_student).then(loadData).catch(err => alert(err.message)); } }}
+                        className="w-full text-left px-4 py-3.5 text-sm hover:bg-slate-50 flex items-center gap-3 font-medium text-slate-700"
+                      >
+                        {br.hide_from_teacher_student ? <Eye className="h-4 w-4 text-emerald-500" /> : <EyeOff className="h-4 w-4 text-rose-500" />}
+                        {br.hide_from_teacher_student ? 'Show to Teachers/Students' : 'Hide from Teachers/Students'}
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setOpenDropdownId(null); if (confirm(`${br.hide_from_coordinator ? 'Show' : 'Hide'} "${br.name}" from Coordinator?`)) { db.updateBranchHideCoordinator(br.id, !br.hide_from_coordinator).then(loadData).catch(err => alert(err.message)); } }}
+                        className="w-full text-left px-4 py-3.5 text-sm hover:bg-slate-50 flex items-center gap-3 font-medium text-slate-700 border-t border-slate-100"
+                      >
+                        {br.hide_from_coordinator ? <Eye className="h-4 w-4 text-emerald-500" /> : <EyeOff className="h-4 w-4 text-purple-500" />}
+                        {br.hide_from_coordinator ? 'Show to Coordinator' : 'Hide from Coordinator'}
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setOpenDropdownId(null); handleRestore(br.id, br.name); }}
+                        disabled={restoring === br.id}
+                        className="w-full text-left px-4 py-3.5 text-sm hover:bg-emerald-50 flex items-center gap-3 font-medium text-emerald-700 border-t border-slate-100 disabled:opacity-50"
+                      >
+                        {restoring === br.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                        Restore to Active
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setOpenDropdownId(null); handleDeleteComplete(br.id, br.name); }}
+                        className="w-full text-left px-4 py-3.5 text-sm hover:bg-red-50 text-red-600 flex items-center gap-3 border-t border-slate-100 font-medium"
+                      >
+                        <Trash2 className="h-4 w-4" /> Permanently Delete
+                      </button>
+                    </div>
+                  )}
+                </div>
                 <ChevronRight className="h-5 w-5 text-amber-400 group-hover:text-amber-600 transition-colors" />
               </div>
             </div>
@@ -803,9 +889,21 @@ const ArchivedClasses: React.FC = () => {
       ) : !selectedBatch ? (
         /* ===== Level 2: Batches for Selected Class ===== */
         <Card>
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
             <h4 className="font-bold text-slate-800">Batches in {selectedBranch.name}</h4>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={() => { if (confirm(`${selectedBranch.hide_from_teacher_student ? 'Show' : 'Hide'} "${selectedBranch.name}" from Teachers & Students?`)) { db.updateBranchHideTeacherStudent(selectedBranch.id, !selectedBranch.hide_from_teacher_student).then(async () => { const fresh = await db.getBranches(); const updated = fresh.find(b => b.id === selectedBranch.id); if (updated) setSelectedBranch(updated); await loadData(); }).catch(err => alert(err.message)); } }}
+                className={`flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-xs font-bold transition-all ${selectedBranch.hide_from_teacher_student ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100' : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'}`}
+              >
+                {selectedBranch.hide_from_teacher_student ? <><Eye className="h-3.5 w-3.5" /> Show T/S</> : <><EyeOff className="h-3.5 w-3.5" /> Hide T/S</>}
+              </button>
+              <button
+                onClick={() => { if (confirm(`${selectedBranch.hide_from_coordinator ? 'Show' : 'Hide'} "${selectedBranch.name}" from Coordinator?`)) { db.updateBranchHideCoordinator(selectedBranch.id, !selectedBranch.hide_from_coordinator).then(async () => { const fresh = await db.getBranches(); const updated = fresh.find(b => b.id === selectedBranch.id); if (updated) setSelectedBranch(updated); await loadData(); }).catch(err => alert(err.message)); } }}
+                className={`flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-xs font-bold transition-all ${selectedBranch.hide_from_coordinator ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100' : 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100'}`}
+              >
+                {selectedBranch.hide_from_coordinator ? <><Eye className="h-3.5 w-3.5" /> Show Coord</> : <><EyeOff className="h-3.5 w-3.5" /> Hide Coord</>}
+              </button>
               <button
                 onClick={(e) => { e.stopPropagation(); handleRestore(selectedBranch.id, selectedBranch.name); }}
                 disabled={restoring === selectedBranch.id}
@@ -830,7 +928,16 @@ const ArchivedClasses: React.FC = () => {
               {batches.map(bt => (
                 <div key={bt.id} onClick={() => handleSelectBatch(bt)} className="group border border-slate-200 p-4 rounded-xl cursor-pointer hover:shadow-lg hover:border-indigo-400 flex justify-between items-center transition-all bg-white">
                   <span className="font-bold text-slate-800">{bt.name}</span>
-                  <ChevronRight className="h-5 w-5 text-slate-300 group-hover:text-indigo-500 transition-colors" />
+                  <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                    <button
+                      title="Rename Batch"
+                      onClick={(e) => { e.stopPropagation(); const newName = prompt('Enter new batch name:', bt.name); if (newName && newName !== bt.name) { db.updateBatchName(bt.id, newName).then(async () => { const fresh = await db.getBatches(selectedBranch.id); setBatches(fresh); }).catch(err => alert(err.message)); } }}
+                      className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                    >
+                      <Edit2 className="h-3.5 w-3.5" />
+                    </button>
+                    <ChevronRight className="h-5 w-5 text-slate-300 group-hover:text-indigo-500 transition-colors" />
+                  </div>
                 </div>
               ))}
             </div>
@@ -839,6 +946,21 @@ const ArchivedClasses: React.FC = () => {
       ) : (
         /* ===== Level 3: Students in Selected Batch ===== */
         <Card>
+          {isEditingStudent && (
+            <div className="mb-4 p-4 bg-indigo-50 border border-indigo-200 rounded-xl">
+              <h5 className="font-bold text-indigo-800 mb-3 text-sm">Edit Student</h5>
+              <form onSubmit={handleEditStudent} className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <Input label="Name" required value={editStudentForm.name} onChange={e => setEditStudentForm({ ...editStudentForm, name: e.target.value })} className="mb-0 bg-white" />
+                <Input label="Mobile No" required value={editStudentForm.mobile} onChange={e => setEditStudentForm({ ...editStudentForm, mobile: e.target.value })} className="mb-0 bg-white" />
+                <Input label="Enrollment" required value={editStudentForm.enroll} onChange={e => setEditStudentForm({ ...editStudentForm, enroll: e.target.value })} className="mb-0 bg-white" />
+                <Input label="Sr No" value={editStudentForm.rollNo} onChange={e => setEditStudentForm({ ...editStudentForm, rollNo: e.target.value })} className="mb-0 bg-white" />
+                <div className="col-span-2 md:col-span-4 flex justify-end gap-2 mt-1">
+                  <Button variant="secondary" type="button" onClick={() => setIsEditingStudent(false)} disabled={editLoading}>Cancel</Button>
+                  <Button type="submit" disabled={editLoading}>{editLoading ? 'Saving...' : 'Save Changes'}</Button>
+                </div>
+              </form>
+            </div>
+          )}
           <div className="flex items-center justify-between mb-4">
             <h4 className="font-bold text-slate-800">Students in {selectedBatch.name}</h4>
             <button
@@ -861,6 +983,10 @@ const ArchivedClasses: React.FC = () => {
                       <div className="text-[10px] font-mono text-slate-600 uppercase">{s.studentData?.enrollmentId} {s.studentData?.rollNo ? `· Sr No: ${s.studentData.rollNo}` : ''}</div>
                       <div className="text-[10px] text-slate-400 font-mono">{s.studentData?.mobileNo}</div>
                     </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <button onClick={() => startEditStudent(s)} className="text-blue-500 p-1" title="Edit"><Edit2 className="h-4 w-4" /></button>
+                      <button onClick={() => handleDeleteStudent(s.uid)} className="text-red-500 p-1" title="Delete"><Trash2 className="h-4 w-4" /></button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -872,15 +998,22 @@ const ArchivedClasses: React.FC = () => {
                     <th className="p-2 text-slate-900">Sr No</th>
                     <th className="p-2 text-slate-900">Name</th>
                     <th className="p-2 text-slate-900">Mobile No</th>
+                    <th className="p-2 text-right text-slate-900">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {[...students].sort((a, b) => (a.studentData?.rollNo || '').localeCompare(b.studentData?.rollNo || '', undefined, { numeric: true })).map(s => (
-                    <tr key={s.uid} className="border-b">
+                    <tr key={s.uid} className="border-b hover:bg-slate-50">
                       <td className="p-2 font-mono text-slate-900">{s.studentData?.enrollmentId}</td>
                       <td className="p-2 font-mono text-slate-900">{s.studentData?.rollNo}</td>
                       <td className="p-2 text-slate-900">{s.displayName}</td>
                       <td className="p-2 text-slate-900 font-mono">{s.studentData?.mobileNo}</td>
+                      <td className="p-2 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          <button onClick={() => startEditStudent(s)} className="text-blue-500 hover:text-blue-700 p-1 rounded hover:bg-blue-50 transition-colors" title="Edit Student"><Edit2 className="h-4 w-4" /></button>
+                          <button onClick={() => handleDeleteStudent(s.uid)} className="text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-50 transition-colors" title="Delete Student"><Trash2 className="h-4 w-4" /></button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1452,7 +1585,14 @@ const StudentManagement: React.FC = () => {
                       )}
                     </div>
                   ) : (
-                    <button onClick={(e) => { e.stopPropagation(); handleDelete(item.id); }} className="text-slate-400 hover:text-red-600 hover:bg-red-50 p-2 rounded-lg transition-colors" title="Delete"><Trash2 className="h-4 w-4" /></button>
+                    <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                      <button
+                        title="Rename Batch"
+                        onClick={(e) => { e.stopPropagation(); const newName = prompt('Enter new batch name:', item.name); if (newName && newName !== item.name) { db.updateBatchName(item.id, newName).then(async () => { if (branchId) { setBatches(await db.getBatches(branchId)); } }).catch(err => alert(err.message)); } }}
+                        className="text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 p-2 rounded-lg transition-colors"
+                      ><Edit2 className="h-4 w-4" /></button>
+                      <button onClick={(e) => { e.stopPropagation(); handleDelete(item.id); }} className="text-slate-400 hover:text-red-600 hover:bg-red-50 p-2 rounded-lg transition-colors" title="Delete"><Trash2 className="h-4 w-4" /></button>
+                    </div>
                   )}
                 </div>
               </div>

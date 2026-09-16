@@ -21,6 +21,7 @@ interface IDataService {
 
   getBatches: (branchId?: string) => Promise<Batch[]>;
   addBatch: (name: string, branchId: string) => Promise<void>;
+  updateBatchName: (id: string, name: string) => Promise<void>;
   deleteBatch: (id: string) => Promise<void>;
 
   // Users
@@ -107,6 +108,27 @@ class SupabaseService implements IDataService {
   private _cache: Record<string, { data: any, ts: number }> = {};
   private readonly DEFAULT_TTL = 1000 * 60 * 10; // 10 minutes
 
+  /** Retry a fetch operation on transient network errors (e.g. "Failed to fetch" on Supabase cold-start). */
+  private async _withRetry<T>(fn: () => Promise<T>, maxAttempts = 3, baseDelayMs = 800): Promise<T> {
+    let lastError: any;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await fn();
+      } catch (err: any) {
+        lastError = err;
+        const isNetworkError =
+          err?.message === 'Failed to fetch' ||
+          err?.message?.includes('NetworkError') ||
+          err?.message?.includes('network') ||
+          err?.name === 'TypeError';
+        // Only retry on transient network errors, not auth/credential errors
+        if (!isNetworkError || attempt === maxAttempts) throw err;
+        await new Promise(res => setTimeout(res, baseDelayMs * attempt));
+      }
+    }
+    throw lastError;
+  }
+
   private async _withCache<T>(key: string, fetcher: () => Promise<T>, ttl = this.DEFAULT_TTL): Promise<T> {
     const now = Date.now();
     // 1. Memory Check
@@ -192,26 +214,29 @@ class SupabaseService implements IDataService {
 
   async login(email: string, pass: string): Promise<User> {
     // Standardize input: lowercase and trim to ensure case-insensitivity
-    const normalizedInput = email.trim().toLowerCase();
+    const normalizedEmail = email.trim().toLowerCase();
+    const loginIdentifier = normalizedEmail;
 
-    const loginIdentifier = normalizedInput;
-
-    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-      email: loginIdentifier,
-      password: pass,
-    });
+    // Wrap auth call with retry to handle transient "Failed to fetch" errors
+    // (common on Supabase cold-starts or brief network blips across year portals)
+    const { data: authData, error: authError } = await this._withRetry(() =>
+      supabase.auth.signInWithPassword({
+        email: loginIdentifier,
+        password: pass,
+      })
+    );
 
     if (authError) throw authError;
     if (!authData.user) throw new Error("Login failed");
 
-    // Fetch profile
-    const { data: profile, error: profError } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', authData.user.id)
-      .single();
-
-    const normalizedEmail = email.trim().toLowerCase();
+    // Fetch profile (also with retry for resilience)
+    const { data: profile, error: profError } = await this._withRetry(async () =>
+      await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', authData.user.id)
+        .single()
+    );
 
     // Map of emails that should always be recognized as Admin or Developer
     const ELEVATED_ROLES: Record<string, UserRole> = {
@@ -369,6 +394,11 @@ class SupabaseService implements IDataService {
     const { error } = await supabase.from('batches').insert([{ id, name, branch_id: branchId }]);
     if (error) throw error;
     this._invalidate(`meta_batches_${branchId}`);
+  }
+  async updateBatchName(id: string, name: string): Promise<void> {
+    const { error } = await supabase.from('batches').update({ name }).eq('id', id);
+    if (error) throw error;
+    this._invalidate('meta_batches_*');
   }
   async deleteBatch(id: string): Promise<void> {
     const { error } = await supabase.from('batches').delete().eq('id', id);
@@ -1563,6 +1593,12 @@ class MockService implements IDataService {
   async deleteBatch(id: string) {
     const b = this.load('ams_batches', SEED_BATCHES);
     this.save('ams_batches', b.filter((x: any) => x.id !== id));
+  }
+  async updateBatchName(id: string, name: string) {
+    const batches = this.load('ams_batches', SEED_BATCHES);
+    const batch = batches.find((b: any) => b.id === id);
+    if (batch) batch.name = name;
+    this.save('ams_batches', batches);
   }
 
   async getStudents(branchId: string, batchId?: string): Promise<User[]> {
