@@ -11,19 +11,32 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Ping Primary Supabase Project
+        continue-on-error: true
         run: |
-          curl -s -X GET "https://rgowcovsultizysqwrff.supabase.co/rest/v1/" \
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://rgowcovsultizysqwrff.supabase.co/rest/v1/branches?limit=1" \
             -H "apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJnb3djb3ZzdWx0aXp5c3F3cmZmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA2MTUzNjgsImV4cCI6MjA4NjE5MTM2OH0.XsLY-ff_JwabjTDKhmykWvE3XiMULjPXBkLlyiMIYxw" \
-            -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJnb3djb3ZzdWx0aXp5c3F3cmZmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA2MTUzNjgsImV4cCI6MjA4NjE5MTM2OH0.XsLY-ff_JwabjTDKhmykWvE3XiMULjPXBkLlyiMIYxw"
-            
+            -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJnb3djb3ZzdWx0aXp5c3F3cmZmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA2MTUzNjgsImV4cCI6MjA4NjE5MTM2OH0.XsLY-ff_JwabjTDKhmykWvE3XiMULjPXBkLlyiMIYxw")
+          echo "Primary project HTTP status: $STATUS"
+          [ "$STATUS" = "200" ] || (echo "Warning: unexpected status $STATUS" && exit 1)
+
       - name: Ping 2nd Year Supabase Project
+        continue-on-error: true
         run: |
-          curl -s -X GET "https://mxbxdtiviuejjwxvqetg.supabase.co/rest/v1/" \
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://mxbxdtiviuejjwxvqetg.supabase.co/rest/v1/branches?limit=1" \
             -H "apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im14YnhkdGl2aXVlamp3eHZxZXRnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQxNjM5NjIsImV4cCI6MjA4OTczOTk2Mn0.JvK3K_7JwrkjEwgYLhoYLbFQVevfw-9LU45iUnnhhOE" \
-            -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im14YnhkdGl2aXVlamp3eHZxZXRnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQxNjM5NjIsImV4cCI6MjA4OTczOTk2Mn0.JvK3K_7JwrkjEwgYLhoYLbFQVevfw-9LU45iUnnhhOE"
+            -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im14YnhkdGl2aXVlamp3eHZxZXRnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQxNjM5NjIsImV4cCI6MjA4OTczOTk2Mn0.JvK3K_7JwrkjEwgYLhoYLbFQVevfw-9LU45iUnnhhOE")
+          echo "2nd Year project HTTP status: $STATUS"
+          [ "$STATUS" = "200" ] || (echo "Warning: unexpected status $STATUS" && exit 1)
 
       - name: Ping 4th Year Supabase Project
+        continue-on-error: true
         run: |
-          curl -s -X GET "https://ghmwyxpmdiafvjagjfqc.supabase.co/rest/v1/" \
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://ghmwyxpmdiafvjagjfqc.supabase.co/rest/v1/branches?limit=1" \
             -H "apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdobXd5eHBtZGlhZnZqYWdqZnFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYwMjc4NjgsImV4cCI6MjEwMTYwMzg2OH0.uNEo7rMENGMYhIU9WhTxCACRH7-6Usef-PGlFLPFO8A" \
-            -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdobXd5eHBtZGlhZnZqYWdqZnFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYwMjc4NjgsImV4cCI6MjEwMTYwMzg2OH0.uNEo7rMENGMYhIU9WhTxCACRH7-6Usef-PGlFLPFO8A"
+            -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdobXd5eHBtZGlhZnZqYWdqZnFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYwMjc4NjgsImV4cCI6MjEwMTYwMzg2OH0.uNEo7rMENGMYhIU9WhTxCACRH7-6Usef-PGlFLPFO8A")
+          echo "4th Year project HTTP status: $STATUS"
+          [ "$STATUS" = "200" ] || (echo "Warning: unexpected status $STATUS" && exit 1)
+
