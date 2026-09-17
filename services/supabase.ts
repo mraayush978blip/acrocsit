@@ -15,14 +15,7 @@ const KEY_2ND = import.meta.env.VITE_SUPABASE_ANON_KEY_2ND || '';
 const URL_4TH = import.meta.env.VITE_SUPABASE_URL_4TH || '';
 const KEY_4TH = import.meta.env.VITE_SUPABASE_ANON_KEY_4TH || '';
 
-// --- Year Selection Helper ---
 export type YearMode = '2nd' | '3rd' | '4th';
-export const getYearMode = (): YearMode =>
-    (localStorage.getItem('acro_year_mode') as YearMode) || '3rd';
-export const setYearMode = (mode: YearMode) => {
-    localStorage.setItem('acro_year_mode', mode);
-    window.location.reload(); // Reload to re-initialise clients with correct credentials
-};
 
 export const getYearDisplayName = (mode: YearMode): string => {
     switch (mode) {
@@ -45,6 +38,41 @@ export const isYearConfigured = (mode: YearMode): boolean => {
     if (mode === '4th') return isValidEnv(URL_4TH) && isValidEnv(KEY_4TH);
     if (mode === '2nd') return isValidEnv(URL_2ND) && isValidEnv(KEY_2ND);
     return isValidEnv(get3rdYearUrl()) && isValidEnv(KEY_3RD);
+};
+
+export const isAnyYearConfigured = (): boolean => {
+    return isYearConfigured('2nd') || isYearConfigured('3rd') || isYearConfigured('4th');
+};
+
+export const getFirstConfiguredYear = (): YearMode => {
+    if (isYearConfigured('2nd')) return '2nd';
+    if (isYearConfigured('3rd')) return '3rd';
+    if (isYearConfigured('4th')) return '4th';
+    return '2nd';
+};
+
+export const getYearMode = (): YearMode => {
+    const saved = localStorage.getItem('acro_year_mode') as YearMode;
+    // If the saved year is explicitly configured, use it
+    if (saved && isYearConfigured(saved)) {
+        return saved;
+    }
+    // If saved year is not configured or not yet chosen, automatically fallback to a configured year!
+    const fallback = getFirstConfiguredYear();
+    if (fallback) {
+        try {
+            localStorage.setItem('acro_year_mode', fallback);
+        } catch (e) {
+            // Storage quota or disabled
+        }
+        return fallback;
+    }
+    return saved || '2nd';
+};
+
+export const setYearMode = (mode: YearMode) => {
+    localStorage.setItem('acro_year_mode', mode);
+    window.location.reload(); // Reload to re-initialise clients with correct credentials
 };
 
 // --- Active Credentials based on selection ---

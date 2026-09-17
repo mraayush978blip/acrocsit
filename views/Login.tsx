@@ -30,6 +30,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
     db.getSystemSettings().then(setSettings).catch(console.error);
     if (sessionStorage.getItem('acro_login_step') === 'form') {
       sessionStorage.removeItem('acro_login_step');
+      setStep('form');
     }
   }, []);
 

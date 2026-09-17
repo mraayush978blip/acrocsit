@@ -2,7 +2,7 @@ import React, { useEffect, useState, lazy, Suspense } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { db } from './services/db';
-import { isConfigured, getYearMode, getYearDisplayName, getYearUnavailableMessage } from './services/supabase';
+import { isConfigured, getYearMode, getYearDisplayName, getYearUnavailableMessage, isYearConfigured, getFirstConfiguredYear, setYearMode } from './services/supabase';
 import { User, UserRole } from './types';
 import { Login } from './views/Login';
 import { Landing } from './views/Landing';
@@ -61,12 +61,41 @@ const App: React.FC = () => {
           <p className="text-slate-600 mb-8 leading-relaxed">
             {getYearUnavailableMessage(yearMode)}
           </p>
-          <button 
-            onClick={() => { localStorage.removeItem('acro_year_mode'); window.location.reload(); }}
-            className="w-full bg-slate-900 hover:bg-slate-800 text-white font-medium py-3 px-4 rounded-xl transition-colors duration-200"
-          >
-            Select Another Year
-          </button>
+          <div className="space-y-3">
+            {isYearConfigured('2nd') && yearMode !== '2nd' && (
+              <button 
+                onClick={() => setYearMode('2nd')}
+                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-4 rounded-xl transition-all shadow-md shadow-indigo-200"
+              >
+                Go to Second Year Portal
+              </button>
+            )}
+            {isYearConfigured('3rd') && yearMode !== '3rd' && (
+              <button 
+                onClick={() => setYearMode('3rd')}
+                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-4 rounded-xl transition-all shadow-md shadow-indigo-200"
+              >
+                Go to Third Year Portal
+              </button>
+            )}
+            {isYearConfigured('4th') && yearMode !== '4th' && (
+              <button 
+                onClick={() => setYearMode('4th')}
+                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-4 rounded-xl transition-all shadow-md shadow-indigo-200"
+              >
+                Go to Fourth Year Portal
+              </button>
+            )}
+            <button 
+              onClick={() => {
+                const target = getFirstConfiguredYear();
+                setYearMode(target);
+              }}
+              className="w-full bg-slate-900 hover:bg-slate-800 text-white font-medium py-3 px-4 rounded-xl transition-colors duration-200"
+            >
+              Select Available Year
+            </button>
+          </div>
         </div>
       </div>
     );
