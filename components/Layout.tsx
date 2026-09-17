@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { LogOut, User as UserIcon, Menu, X, ChevronDown, Settings, Bell, Check, ExternalLink, Trash2, Heart, Download, Smartphone, Activity, AlertCircle, Bug, Linkedin, Code2, Globe, Book, Coffee, Maximize } from 'lucide-react';
 import { User, UserRole, Notification } from '../types';
 import { db } from '../services/db';
-import { supabase, getYearMode, setYearMode } from '../services/supabase';
+import { supabase, getYearMode, setYearMode, isYearConfigured, getYearUnavailableMessage } from '../services/supabase';
 import { AcropolisLogo, Modal, Button, AboutDeveloperModal, ExportProgressModal } from './UI';
 import DeveloperSupportModal from './DeveloperSupportModal';
 
@@ -461,6 +461,10 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout, onOpen
               value={currentYearMode}
               onChange={(e) => {
                 const newMode = e.target.value as '2nd' | '3rd' | '4th';
+                if (!isYearConfigured(newMode)) {
+                  alert(getYearUnavailableMessage(newMode));
+                  return;
+                }
                 if (confirm(`Switching to ${newMode} Year database. The page will reload.`)) {
                   setYearMode(newMode);
                 }

@@ -24,10 +24,27 @@ export const setYearMode = (mode: YearMode) => {
     window.location.reload(); // Reload to re-initialise clients with correct credentials
 };
 
+export const getYearDisplayName = (mode: YearMode): string => {
+    switch (mode) {
+        case '2nd': return 'Second Year';
+        case '3rd': return 'Third Year';
+        case '4th': return 'Fourth Year';
+        default: return `${mode} Year`;
+    }
+};
+
+export const getYearUnavailableMessage = (mode: YearMode): string => {
+    return `Services for ${getYearDisplayName(mode)} are not yet available. Soon we will start this app in that year!`;
+};
+
+const isValidEnv = (val?: string): boolean => {
+    return Boolean(val && val.trim() !== '' && !val.includes('placeholder') && !val.includes('dummy'));
+};
+
 export const isYearConfigured = (mode: YearMode): boolean => {
-    if (mode === '4th') return Boolean(URL_4TH && KEY_4TH);
-    if (mode === '2nd') return Boolean(URL_2ND && KEY_2ND);
-    return Boolean(get3rdYearUrl() && KEY_3RD);
+    if (mode === '4th') return isValidEnv(URL_4TH) && isValidEnv(KEY_4TH);
+    if (mode === '2nd') return isValidEnv(URL_2ND) && isValidEnv(KEY_2ND);
+    return isValidEnv(get3rdYearUrl()) && isValidEnv(KEY_3RD);
 };
 
 // --- Active Credentials based on selection ---
@@ -35,7 +52,7 @@ const yearMode = getYearMode();
 const resolvedUrl = yearMode === '4th' ? URL_4TH : (yearMode === '2nd' ? URL_2ND : get3rdYearUrl());
 const resolvedKey = yearMode === '4th' ? KEY_4TH : (yearMode === '2nd' ? KEY_2ND : KEY_3RD);
 
-export const isConfigured = Boolean(resolvedUrl && resolvedKey);
+export const isConfigured = isYearConfigured(yearMode);
 
 const supabaseUrl = isConfigured ? resolvedUrl : 'https://dummy.supabase.co';
 const supabaseAnonKey = isConfigured ? resolvedKey : 'dummy';

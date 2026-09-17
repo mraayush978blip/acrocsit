@@ -3,7 +3,7 @@ import { db } from '../services/db';
 import { User, SystemSettings } from '../types';
 import { Button, Card, Input, AcropolisLogo, Select, AboutDeveloperModal } from '../components/UI';
 import { Lock, Mail, Eye, EyeOff, Users, ArrowLeft, GraduationCap, BookOpen, Layers } from 'lucide-react';
-import { getYearMode, setYearMode, YearMode, isYearConfigured } from '../services/supabase';
+import { getYearMode, setYearMode, YearMode, isYearConfigured, getYearUnavailableMessage } from '../services/supabase';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 
@@ -23,9 +23,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const [selectedRole, setSelectedRole] = useState<'FACULTY' | 'COORDINATOR' | 'STUDENT'>('FACULTY');
   
   // New State for Two-Step Flow
-  const [step, setStep] = useState<'year' | 'form'>(
-    sessionStorage.getItem('acro_login_step') === 'form' ? 'form' : 'year'
-  );
+  const [step, setStep] = useState<'year' | 'form'>('year');
   const [yearMode, setYearModeState] = useState<YearMode>(getYearMode());
 
   React.useEffect(() => {
@@ -37,7 +35,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
 
   const handleYearSelect = (mode: YearMode) => {
     if (!isYearConfigured(mode)) {
-      setError(`${mode} Year is currently under development. The developer is working on it!`);
+      setError(getYearUnavailableMessage(mode));
       return;
     }
     setError('');
@@ -52,6 +50,10 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    if (!isYearConfigured(yearMode)) {
+      setError(getYearUnavailableMessage(yearMode));
+      return;
+    }
     setLoading(true);
     try {
       if (selectedRole === 'STUDENT' && !settings.studentLoginEnabled) {
@@ -184,21 +186,29 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
               )}
 
               <div className="grid grid-cols-3 gap-3 mb-2">
-                {years.map((y) => (
-                  <button
-                    key={y.id}
-                    onClick={() => handleYearSelect(y.id)}
-                    className={`group relative flex flex-col items-center justify-center p-6 bg-slate-50 hover:bg-indigo-600 border border-slate-200/60 rounded-2xl transition-all duration-300 transform hover:-translate-y-1 hover:shadow-xl overflow-hidden`}
-                  >
-                    <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/0 to-indigo-600/0 group-hover:from-white/10 group-hover:to-transparent transition-colors duration-300" />
-                    <div className="text-indigo-600 group-hover:text-white transition-colors duration-300 relative z-10">
-                      {y.icon}
-                    </div>
-                    <span className="font-bold text-slate-700 group-hover:text-white transition-colors duration-300 relative z-10">
-                      {y.label}
-                    </span>
-                  </button>
-                ))}
+                {years.map((y) => {
+                  const configured = isYearConfigured(y.id);
+                  return (
+                    <button
+                      key={y.id}
+                      onClick={() => handleYearSelect(y.id)}
+                      className="group relative flex flex-col items-center justify-center p-6 bg-slate-50 hover:bg-indigo-600 border border-slate-200/60 rounded-2xl transition-all duration-300 transform hover:-translate-y-1 hover:shadow-xl overflow-hidden"
+                    >
+                      <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/0 to-indigo-600/0 group-hover:from-white/10 group-hover:to-transparent transition-colors duration-300" />
+                      <div className="text-indigo-600 group-hover:text-white transition-colors duration-300 relative z-10">
+                        {y.icon}
+                      </div>
+                      <span className="font-bold text-slate-700 group-hover:text-white transition-colors duration-300 relative z-10">
+                        {y.label}
+                      </span>
+                      {!configured && (
+                        <span className="text-[10px] font-bold text-amber-700 bg-amber-100/90 px-2 py-0.5 rounded-full mt-1.5 relative z-10 group-hover:bg-white group-hover:text-indigo-600 transition-colors">
+                          Soon
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             </motion.div>
           )}

@@ -1,9 +1,8 @@
-
 import React, { useEffect, useState, lazy, Suspense } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { db } from './services/db';
-import { isConfigured, getYearMode } from './services/supabase';
+import { isConfigured, getYearMode, getYearDisplayName, getYearUnavailableMessage } from './services/supabase';
 import { User, UserRole } from './types';
 import { Login } from './views/Login';
 import { Landing } from './views/Landing';
@@ -49,24 +48,24 @@ const PageTransition = ({ children, className = "h-full w-full" }: { children: R
 const App: React.FC = () => {
   if (!isConfigured) {
     const yearMode = getYearMode();
+    const displayName = getYearDisplayName(yearMode);
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4 font-sans">
         <div className="bg-white p-8 rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] text-center max-w-md w-full border border-slate-100">
-          <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-6">
+          <div className="w-16 h-16 bg-amber-50 text-amber-600 rounded-full flex items-center justify-center mx-auto mb-6">
             <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
           </div>
-          <h2 className="text-2xl font-bold text-slate-800 mb-3">{yearMode} Year Under Maintenance</h2>
+          <h2 className="text-2xl font-bold text-slate-800 mb-3">{displayName} Coming Soon</h2>
           <p className="text-slate-600 mb-8 leading-relaxed">
-            The developer is currently working on setting up the database for this academic year. Please check back later.
+            {getYearUnavailableMessage(yearMode)}
           </p>
           <button 
             onClick={() => { localStorage.removeItem('acro_year_mode'); window.location.reload(); }}
             className="w-full bg-slate-900 hover:bg-slate-800 text-white font-medium py-3 px-4 rounded-xl transition-colors duration-200"
           >
-            Go Back
+            Select Another Year
           </button>
         </div>
       </div>
