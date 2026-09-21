@@ -32,6 +32,7 @@ interface IDataService {
   importStudents: (students: Partial<User>[], onProgress?: (current: number, total: number) => void) => Promise<{ success: number; failed: number; errors: string[] }>;
   deleteUser: (uid: string) => Promise<void>;
   migrateStudentEnrollment: (oldUid: string, oldProfile: User, newEnrollment: string) => Promise<string>;
+  syncMissingAttendanceForBranch: (branchId: string) => Promise<void>;
   getAttendanceCount: () => Promise<number>;
   getNotificationsCount: () => Promise<number>;
 
@@ -682,41 +683,160 @@ class SupabaseService implements IDataService {
 
   private async syncLateStudentAttendance(studentId: string, branchId: string, batchId: string): Promise<void> {
     try {
+      // 1. Get subjects to know which are theory vs lab
+      const { data: subjects } = await supabase.from('subjects').select('id, type');
+      const subjectTypeMap = new Map<string, string>();
+      (subjects || []).forEach(s => subjectTypeMap.set(s.id, s.type));
+
+      // 2. Fetch all branch attendance records
       const { data, error } = await supabase.from('attendance')
-        .select('date, subject_id, lecture_slot, marked_by, timestamp')
-        .eq('branch_id', branchId)
-        .eq('batch_id', batchId);
+        .select('date, subject_id, lecture_slot, marked_by, timestamp, batch_id')
+        .eq('branch_id', branchId);
 
       if (error || !data || data.length === 0) return;
 
+      // 3. For Theory: all branch sessions apply. For Lab: only matching batch or ALL.
       const uniqueSessions = new Map<string, any>();
       data.forEach(r => {
-        const key = `${r.date}_${r.subject_id}_${r.lecture_slot}`;
+        const type = subjectTypeMap.get(r.subject_id) || 'theory';
+        const isApplicable = type === 'theory' || r.batch_id === batchId || r.batch_id === 'ALL';
+        if (!isApplicable) return;
+
+        const slot = r.lecture_slot || 1;
+        const key = `${r.date}_${r.subject_id}_${slot}`;
         if (!uniqueSessions.has(key)) {
-          uniqueSessions.set(key, r);
+          uniqueSessions.set(key, { ...r, lecture_slot: slot });
         }
       });
 
-      const newRecords = Array.from(uniqueSessions.values()).map((r, i) => ({
-        id: `att_${studentId.substring(0, 5)}_${Date.now()}_${i}`,
-        date: r.date,
-        student_id: studentId,
-        subject_id: r.subject_id,
-        branch_id: branchId,
-        batch_id: batchId,
-        is_present: false,
-        marked_by: r.marked_by,
-        timestamp: r.timestamp,
-        lecture_slot: r.lecture_slot,
-        reason: 'Added late to batch'
-      }));
+      // 4. Check which sessions this student already has
+      const { data: existingStudentRecs } = await supabase.from('attendance')
+        .select('date, subject_id, lecture_slot')
+        .eq('student_id', studentId);
+      const existingKeys = new Set((existingStudentRecs || []).map(r => `${r.date}_${r.subject_id}_${r.lecture_slot || 1}`));
 
-      for (let i = 0; i < newRecords.length; i += 500) {
-        const { error } = await supabase.from('attendance').insert(newRecords.slice(i, i + 500));
-        if (error) throw error;
+      const toInsert = Array.from(uniqueSessions.values())
+        .filter(r => !existingKeys.has(`${r.date}_${r.subject_id}_${r.lecture_slot}`))
+        .map((r, i) => ({
+          id: `att_${studentId.substring(0, 5)}_${Date.now()}_${i}`,
+          date: r.date,
+          student_id: studentId,
+          subject_id: r.subject_id,
+          branch_id: branchId,
+          batch_id: batchId,
+          is_present: false,
+          marked_by: r.marked_by,
+          timestamp: r.timestamp,
+          lecture_slot: r.lecture_slot,
+          reason: 'Added late to class'
+        }));
+
+      if (toInsert.length > 0) {
+        for (let i = 0; i < toInsert.length; i += 500) {
+          const { error: insErr } = await supabase.from('attendance').insert(toInsert.slice(i, i + 500));
+          if (insErr) throw insErr;
+        }
+        this._invalidate('attendance_*');
       }
     } catch (err) {
       console.error("Failed to sync late student attendance:", err);
+    }
+  }
+
+  async syncMissingAttendanceForBranch(branchId: string): Promise<void> {
+    try {
+      const { data: students, error: stuErr } = await supabase.from('profiles')
+        .select('id, branch_id, batch_id')
+        .eq('branch_id', branchId)
+        .eq('role', UserRole.STUDENT);
+      if (stuErr || !students || students.length === 0) return;
+
+      const { data: subjects } = await supabase.from('subjects').select('id, type');
+      const subjectTypeMap = new Map<string, string>();
+      (subjects || []).forEach(s => subjectTypeMap.set(s.id, s.type));
+
+      const { data: attRecs, error: attErr } = await supabase.from('attendance')
+        .select('id, date, student_id, subject_id, lecture_slot, marked_by, timestamp, batch_id')
+        .eq('branch_id', branchId);
+      if (attErr || !attRecs || attRecs.length === 0) return;
+
+      const theorySessions = new Map<string, any>();
+      const labSessions = new Map<string, any>();
+
+      attRecs.forEach(r => {
+        const type = subjectTypeMap.get(r.subject_id) || 'theory';
+        const slot = r.lecture_slot || 1;
+        if (type === 'theory') {
+          const key = `${r.subject_id}_${r.date}_${slot}`;
+          if (!theorySessions.has(key)) theorySessions.set(key, { ...r, lecture_slot: slot });
+        } else {
+          const key = `${r.subject_id}_${r.batch_id}_${r.date}_${slot}`;
+          if (!labSessions.has(key)) labSessions.set(key, { ...r, lecture_slot: slot });
+        }
+      });
+
+      const studentAttKeys = new Set<string>();
+      attRecs.forEach(r => {
+        const slot = r.lecture_slot || 1;
+        studentAttKeys.add(`${r.student_id}_${r.subject_id}_${r.date}_${slot}`);
+      });
+
+      const recordsToInsert: any[] = [];
+      students.forEach(student => {
+        const sBatch = student.batch_id || '';
+        theorySessions.forEach(sess => {
+          const slot = sess.lecture_slot || 1;
+          const checkKey = `${student.id}_${sess.subject_id}_${sess.date}_${slot}`;
+          if (!studentAttKeys.has(checkKey)) {
+            recordsToInsert.push({
+              id: `att_${student.id.substring(0, 5)}_${Date.now()}_${recordsToInsert.length}`,
+              date: sess.date,
+              student_id: student.id,
+              subject_id: sess.subject_id,
+              branch_id: branchId,
+              batch_id: sBatch,
+              is_present: false,
+              marked_by: sess.marked_by,
+              timestamp: sess.timestamp,
+              lecture_slot: slot,
+              reason: 'Added late to class'
+            });
+            studentAttKeys.add(checkKey);
+          }
+        });
+
+        labSessions.forEach(sess => {
+          if (sess.batch_id === sBatch || sess.batch_id === 'ALL') {
+            const slot = sess.lecture_slot || 1;
+            const checkKey = `${student.id}_${sess.subject_id}_${sess.date}_${slot}`;
+            if (!studentAttKeys.has(checkKey)) {
+              recordsToInsert.push({
+                id: `att_${student.id.substring(0, 5)}_${Date.now()}_${recordsToInsert.length}`,
+                date: sess.date,
+                student_id: student.id,
+                subject_id: sess.subject_id,
+                branch_id: branchId,
+                batch_id: sBatch,
+                is_present: false,
+                marked_by: sess.marked_by,
+                timestamp: sess.timestamp,
+                lecture_slot: slot,
+                reason: 'Added late to class'
+              });
+              studentAttKeys.add(checkKey);
+            }
+          }
+        });
+      });
+
+      if (recordsToInsert.length > 0) {
+        for (let i = 0; i < recordsToInsert.length; i += 500) {
+          await supabase.from('attendance').insert(recordsToInsert.slice(i, i + 500));
+        }
+        this._invalidate('attendance_*');
+      }
+    } catch (err) {
+      console.warn("Failed to sync missing branch attendance:", err);
     }
   }
 
@@ -1965,6 +2085,81 @@ class MockService implements IDataService {
   async getBranchAttendance(branchId: string, date?: string) {
     const all = this.load('ams_attendance', []) as AttendanceRecord[];
     return all.filter(a => a.branchId === branchId && (!date || a.date === date));
+  }
+
+  async syncMissingAttendanceForBranch(branchId: string): Promise<void> {
+    const students = (this.load('ams_users', SEED_USERS) as User[]).filter(u => u.role === UserRole.STUDENT && u.studentData?.branchId === branchId);
+    const subjects = this.load('ams_subjects', SEED_SUBJECTS) as Subject[];
+    const subjectTypeMap = new Map(subjects.map(s => [s.id, s.type]));
+    const allAtt = this.load('ams_attendance', []) as AttendanceRecord[];
+    const branchAtt = allAtt.filter(a => a.branchId === branchId);
+    if (branchAtt.length === 0 || students.length === 0) return;
+
+    const theorySessions = new Map<string, AttendanceRecord>();
+    const labSessions = new Map<string, AttendanceRecord>();
+    branchAtt.forEach(r => {
+      const type = subjectTypeMap.get(r.subjectId) || 'theory';
+      const slot = r.lectureSlot || 1;
+      if (type === 'theory') {
+        const key = `${r.subjectId}_${r.date}_${slot}`;
+        if (!theorySessions.has(key)) theorySessions.set(key, { ...r, lectureSlot: slot });
+      } else {
+        const key = `${r.subjectId}_${r.batchId}_${r.date}_${slot}`;
+        if (!labSessions.has(key)) labSessions.set(key, { ...r, lectureSlot: slot });
+      }
+    });
+
+    const studentAttKeys = new Set(branchAtt.map(r => `${r.studentId}_${r.subjectId}_${r.date}_${r.lectureSlot || 1}`));
+    const newRecords: AttendanceRecord[] = [];
+
+    students.forEach(student => {
+      const sBatch = student.studentData?.batchId || '';
+      theorySessions.forEach(sess => {
+        const slot = sess.lectureSlot || 1;
+        const key = `${student.uid}_${sess.subjectId}_${sess.date}_${slot}`;
+        if (!studentAttKeys.has(key)) {
+          newRecords.push({
+            id: `att_${student.uid.substring(0, 5)}_${Date.now()}_${newRecords.length}`,
+            date: sess.date,
+            studentId: student.uid,
+            subjectId: sess.subjectId,
+            branchId: branchId,
+            batchId: sBatch,
+            isPresent: false,
+            timestamp: sess.timestamp,
+            lectureSlot: slot,
+            reason: 'Added late to class'
+          });
+          studentAttKeys.add(key);
+        }
+      });
+
+      labSessions.forEach(sess => {
+        if (sess.batchId === sBatch || sess.batchId === 'ALL') {
+          const slot = sess.lectureSlot || 1;
+          const key = `${student.uid}_${sess.subjectId}_${sess.date}_${slot}`;
+          if (!studentAttKeys.has(key)) {
+            newRecords.push({
+              id: `att_${student.uid.substring(0, 5)}_${Date.now()}_${newRecords.length}`,
+              date: sess.date,
+              studentId: student.uid,
+              subjectId: sess.subjectId,
+              branchId: branchId,
+              batchId: sBatch,
+              isPresent: false,
+              timestamp: sess.timestamp,
+              lectureSlot: slot,
+              reason: 'Added late to class'
+            });
+            studentAttKeys.add(key);
+          }
+        }
+      });
+    });
+
+    if (newRecords.length > 0) {
+      this.save('ams_attendance', [...allAtt, ...newRecords]);
+    }
   }
 
   async getDateAttendance(date: string) {

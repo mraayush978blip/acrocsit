@@ -2041,6 +2041,12 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
          const load = async () => {
             setLoadingStudents(true);
             try {
+               // Auto-heal / sync missing attendance records for late added students in background
+               db.syncMissingAttendanceForBranch(selBranchId).then(async () => {
+                  const fresh = await db.getAttendance(selBranchId, 'ALL', selSubjectId);
+                  setAllClassRecords(fresh);
+               }).catch(e => console.warn("Sync missing attendance warning:", e));
+
                // Fetch ALL students for the branch, we filter in UI based on selectedMarkingBatches
                const data: User[] = await db.getStudents(selBranchId);
 
@@ -3153,7 +3159,50 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
 
    // Drill Down View
    if (viewHistoryStudent) {
-      const studentRecords = allClassRecords.filter(r => r.studentId === viewHistoryStudent.uid).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      const currentSubject = metaData.subjects[selSubjectId];
+      const isLabSubject = currentSubject?.type === 'lab';
+      const studentBatchId = viewHistoryStudent.studentData?.batchId || '';
+
+      // Collect all sessions conducted for this subject relevant to this student
+      const sessionMap = new Map<string, { date: string; lectureSlot: number; batchId: string }>();
+      allClassRecords.forEach(r => {
+         if (isLabSubject && r.batchId !== studentBatchId && r.batchId !== 'ALL') return;
+         const slot = r.lectureSlot || 1;
+         const key = `${r.date}_${slot}`;
+         if (!sessionMap.has(key)) {
+            sessionMap.set(key, { date: r.date, lectureSlot: slot, batchId: r.batchId });
+         }
+      });
+
+      const myRecords = allClassRecords.filter(r => r.studentId === viewHistoryStudent.uid);
+      const myRecordsByKey = new Map<string, AttendanceRecord>();
+      myRecords.forEach(r => {
+         const slot = r.lectureSlot || 1;
+         myRecordsByKey.set(`${r.date}_${slot}`, r);
+      });
+
+      // Construct timeline: every conducted session is accounted for
+      // If student was marked, show actual record; if added late, synthesize ABSENT
+      const studentRecords: AttendanceRecord[] = Array.from(sessionMap.values()).map(sess => {
+         const key = `${sess.date}_${sess.lectureSlot}`;
+         if (myRecordsByKey.has(key)) {
+            return myRecordsByKey.get(key)!;
+         }
+         return {
+            id: `late_abs_${viewHistoryStudent.uid}_${sess.date}_${sess.lectureSlot}`,
+            studentId: viewHistoryStudent.uid,
+            date: sess.date,
+            lectureSlot: sess.lectureSlot,
+            subjectId: selSubjectId,
+            branchId: selBranchId,
+            batchId: studentBatchId,
+            isPresent: false,
+            timestamp: new Date(sess.date).getTime(),
+            markedBy: '',
+            reason: 'Added late to class'
+         } as AttendanceRecord;
+      }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime() || (b.lectureSlot || 0) - (a.lectureSlot || 0));
+
       const total = studentRecords.length;
       const present = studentRecords.filter(r => r.isPresent).length;
       const pct = total === 0 ? 0 : Math.round((present / total) * 100);
@@ -3217,8 +3266,15 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
                         <div className={`text-sm font-black leading-none mb-2 ${r.isPresent ? 'text-emerald-600' : 'text-rose-600'}`}>
                            {r.isPresent ? 'PRESENT' : 'ABSENT'}
                         </div>
-                        <div className="inline-flex items-center px-2 py-0.5 rounded-lg bg-slate-100/50 text-[9px] font-black text-slate-500 group-hover:bg-indigo-50 group-hover:text-indigo-600 transition-colors">
-                           SLOT {r.lectureSlot || 1}
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                           <div className="inline-flex items-center px-2 py-0.5 rounded-lg bg-slate-100/50 text-[9px] font-black text-slate-500 group-hover:bg-indigo-50 group-hover:text-indigo-600 transition-colors">
+                              SLOT {r.lectureSlot || 1}
+                           </div>
+                           {r.reason && (
+                              <span className="text-[9px] font-bold text-rose-500 bg-rose-50 px-1.5 py-0.5 rounded-md border border-rose-100">
+                                 {r.reason}
+                              </span>
+                           )}
                         </div>
                      </div>
                   ))}
