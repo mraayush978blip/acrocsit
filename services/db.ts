@@ -31,6 +31,7 @@ interface IDataService {
   updateStudent: (uid: string, data: Partial<User>) => Promise<void>;
   importStudents: (students: Partial<User>[], onProgress?: (current: number, total: number) => void) => Promise<{ success: number; failed: number; errors: string[] }>;
   deleteUser: (uid: string) => Promise<void>;
+  migrateStudentEnrollment: (oldUid: string, oldProfile: User, newEnrollment: string) => Promise<string>;
   getAttendanceCount: () => Promise<number>;
   getNotificationsCount: () => Promise<number>;
 
@@ -435,6 +436,174 @@ class SupabaseService implements IDataService {
       }
     }
   }
+
+  /**
+   * Full enrollment migration:
+   * 1. Creates a new auth user with newEnrollment@acropolis.in
+   * 2. Inserts a new profile row with the new UID
+   * 3. Migrates attendance, marks, notifications, deleted_attendance to new UID
+   * 4. Deletes the old profile + auth user
+   * 5. Updates whitelist (removes old email, adds new)
+   *
+   * @param oldUid       - UUID of the existing student auth user
+   * @param oldProfile   - Full current profile/user data of the student
+   * @param newEnrollment - The new enrollment number (e.g. "0827CY221055")
+   */
+  async migrateStudentEnrollment(
+    oldUid: string,
+    oldProfile: User,
+    newEnrollment: string
+  ): Promise<string> {
+    const cleanNewEnrollment = newEnrollment.trim().toUpperCase();
+    const cleanOldEnrollment = (oldProfile.studentData?.enrollmentId || '').trim().toUpperCase();
+
+    if (!cleanNewEnrollment) {
+      throw new Error("New enrollment ID is required.");
+    }
+    if (cleanNewEnrollment === cleanOldEnrollment) {
+      throw new Error("New enrollment ID is identical to the current one.");
+    }
+
+    const oldEmail = (oldProfile.email || `${cleanOldEnrollment.toLowerCase()}@acropolis.in`).toLowerCase().trim();
+    const newEmail = `${cleanNewEnrollment.toLowerCase()}@acropolis.in`;
+    const password = oldProfile.studentData?.mobileNo || cleanNewEnrollment;
+
+    let newUid: string | null = null;
+
+    try {
+      // --- Step 1: Add new email to whitelist ---
+      const { error: wlError } = await supabase.from('whitelist').upsert([{ email: newEmail, role: UserRole.STUDENT }]);
+      if (wlError) throw new Error(`Whitelist update failed: ${wlError.message}`);
+
+      // --- Step 2: Create new auth user ---
+      const { data: authData, error: authError } = await authClient.auth.signUp({
+        email: newEmail,
+        password,
+        options: { data: { display_name: oldProfile.displayName, role: UserRole.STUDENT } }
+      });
+      if (authError) throw new Error(`Auth user creation failed: ${authError.message}`);
+      if (!authData.user) throw new Error('New auth user was not created.');
+      newUid = authData.user.id;
+
+      // --- Step 3: Create new profile row ---
+      const { error: profError } = await supabase.from('profiles').insert([{
+        id: newUid,
+        email: newEmail,
+        display_name: oldProfile.displayName,
+        role: UserRole.STUDENT,
+        branch_id: oldProfile.studentData?.branchId,
+        batch_id: oldProfile.studentData?.batchId,
+        enrollment_id: cleanNewEnrollment,
+        roll_no: oldProfile.studentData?.rollNo,
+        mobile_no: oldProfile.studentData?.mobileNo
+      }]);
+      if (profError) throw new Error(`Profile creation failed: ${profError.message}`);
+
+      // --- Step 4: Migrate attendance records ---
+      const { data: attRecs, error: attFetchErr } = await supabase
+        .from('attendance').select('*').eq('student_id', oldUid);
+      if (attFetchErr) throw new Error(`Attendance fetch failed: ${attFetchErr.message}`);
+
+      if (attRecs && attRecs.length > 0) {
+        const migratedAtt = attRecs.map((r: any, i: number) => ({
+          ...r,
+          id: `att_mig_${newUid!.substring(0, 5)}_${Date.now()}_${i}`,
+          student_id: newUid
+        }));
+        for (let i = 0; i < migratedAtt.length; i += 500) {
+          const { error } = await supabase.from('attendance').insert(migratedAtt.slice(i, i + 500));
+          if (error) throw new Error(`Attendance migration failed: ${error.message}`);
+        }
+      }
+
+      // --- Step 5: Migrate marks records ---
+      const { data: markRecs, error: markFetchErr } = await supabase
+        .from('marks').select('*').eq('student_id', oldUid);
+      if (markFetchErr) throw new Error(`Marks fetch failed: ${markFetchErr.message}`);
+
+      if (markRecs && markRecs.length > 0) {
+        const migratedMarks = markRecs.map((r: any) => ({
+          ...r,
+          id: `mrk_mig_${newUid!.substring(0, 5)}_${r.subject_id}_${r.mid_sem_type}`,
+          student_id: newUid
+        }));
+        for (let i = 0; i < migratedMarks.length; i += 500) {
+          const { error } = await supabase.from('marks').insert(migratedMarks.slice(i, i + 500));
+          if (error) throw new Error(`Marks migration failed: ${error.message}`);
+        }
+      }
+
+      // --- Step 6: Migrate notifications (to_user_id) ---
+      const { data: notifRecs } = await supabase
+        .from('notifications').select('*').eq('to_user_id', oldUid);
+      if (notifRecs && notifRecs.length > 0) {
+        const migratedNotifs = notifRecs.map((r: any) => ({
+          ...r,
+          id: `notif_mig_${newUid!.substring(0, 5)}_${r.id}`,
+          to_user_id: newUid
+        }));
+        for (let i = 0; i < migratedNotifs.length; i += 200) {
+          await supabase.from('notifications').insert(migratedNotifs.slice(i, i + 200));
+        }
+      }
+
+      // --- Step 7: Migrate deleted_attendance (recycle bin) ---
+      const { data: delRecs } = await supabase
+        .from('deleted_attendance').select('*').eq('student_id', oldUid);
+      if (delRecs && delRecs.length > 0) {
+        const migratedDel = delRecs.map((r: any, i: number) => ({
+          ...r,
+          id: `del_mig_${newUid!.substring(0, 5)}_${Date.now()}_${i}`,
+          student_id: newUid
+        }));
+        for (let i = 0; i < migratedDel.length; i += 500) {
+          await supabase.from('deleted_attendance').insert(migratedDel.slice(i, i + 500));
+        }
+      }
+
+      // --- Step 8: Delete old records + auth user ---
+      // Delete old rows first so foreign keys don't block
+      await supabase.from('attendance').delete().eq('student_id', oldUid);
+      await supabase.from('marks').delete().eq('student_id', oldUid);
+      await supabase.from('notifications').delete().eq('to_user_id', oldUid);
+      await supabase.from('deleted_attendance').delete().eq('student_id', oldUid);
+
+      const { error: rpcError } = await supabase.rpc('admin_delete_user', { target_user_id: oldUid });
+      if (rpcError) {
+        console.warn("admin_delete_user RPC warning, falling back to manual profile deletion:", rpcError);
+        await supabase.from('profiles').delete().eq('id', oldUid);
+      }
+
+      // --- Step 9: Remove old email from whitelist ---
+      await supabase.from('whitelist').delete().eq('email', oldEmail);
+
+      // Reindex branch roll numbers
+      if (oldProfile.studentData?.branchId) {
+        await this.reindexBranchStudents(oldProfile.studentData.branchId);
+      }
+
+      this._invalidate('students_*');
+      return newUid;
+    } catch (err: any) {
+      // Rollback: if migration failed before completion, cleanly remove any partial new account
+      if (newUid) {
+        try {
+          await supabase.from('attendance').delete().eq('student_id', newUid);
+          await supabase.from('marks').delete().eq('student_id', newUid);
+          await supabase.from('notifications').delete().eq('to_user_id', newUid);
+          await supabase.from('deleted_attendance').delete().eq('student_id', newUid);
+          await supabase.from('profiles').delete().eq('id', newUid);
+          await supabase.rpc('admin_delete_user', { target_user_id: newUid });
+          await supabase.from('whitelist').delete().eq('email', newEmail);
+        } catch (cleanupErr) {
+          console.warn("Rollback cleanup warning:", cleanupErr);
+        }
+      }
+      throw err;
+    }
+  }
+
+
 
   // --- Users ---
   async getStudents(branchId: string, batchId?: string): Promise<User[]> {
@@ -1663,6 +1832,18 @@ class MockService implements IDataService {
   async deleteUser(uid: string) {
     const u = this.load('ams_users', SEED_USERS);
     this.save('ams_users', u.filter((x: any) => x.uid !== uid));
+  }
+
+  async migrateStudentEnrollment(oldUid: string, oldProfile: User, newEnrollment: string): Promise<string> {
+    // Mock: just update the enrollment_id in-place (no real auth migration needed in demo mode)
+    const users = this.load('ams_users', SEED_USERS) as User[];
+    const idx = users.findIndex(u => u.uid === oldUid);
+    if (idx >= 0 && users[idx].studentData) {
+      (users[idx].studentData as any).enrollmentId = newEnrollment;
+      users[idx].email = `${newEnrollment.toLowerCase()}@acropolis.in`;
+    }
+    this.save('ams_users', users);
+    return oldUid; // Mock returns same uid since no real auth user is created
   }
 
   async getSubjects() { return this.load('ams_subjects', SEED_SUBJECTS); }

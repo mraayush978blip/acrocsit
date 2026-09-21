@@ -2210,6 +2210,37 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
       // 1. Statistics Calculation (Pre-compute per-student stats for the selected period)
       const statsMap = new Map<string, { total: number, present: number, pct: number, filteredRecs: AttendanceRecord[], dateRecs: AttendanceRecord[] }>();
 
+      // Determine subject type for correct session counting
+      const currentSubject = metaData.subjects[selSubjectId];
+      const isLabSubject = currentSubject?.type === 'lab';
+
+      // For THEORY: sessions are branch-wide (same for all batches — one class for everyone)
+      // Pre-compute theory sessions once (unique date_slot across all records of this subject in date range)
+      const theorySessionsInRange = new Set(
+         allClassRecords
+            .filter(r => {
+               const inStart = !historyStartDate || r.date >= historyStartDate;
+               const inEnd = !historyTillDate || r.date <= historyTillDate;
+               return inStart && inEnd;
+            })
+            .map(r => `${r.date}_${r.lectureSlot}`)
+      );
+
+      // For LAB: sessions are per-batch (different batches have different lab sessions)
+      // Pre-compute lab sessions per batchId
+      const labSessionsPerBatch = new Map<string, Set<string>>();
+      allClassRecords
+         .filter(r => {
+            const inStart = !historyStartDate || r.date >= historyStartDate;
+            const inEnd = !historyTillDate || r.date <= historyTillDate;
+            return inStart && inEnd;
+         })
+         .forEach(r => {
+            const bId = r.batchId;
+            if (!labSessionsPerBatch.has(bId)) labSessionsPerBatch.set(bId, new Set());
+            labSessionsPerBatch.get(bId)!.add(`${r.date}_${r.lectureSlot}`);
+         });
+
       visibleStudents.forEach(s => {
          const myRecs = allClassRecords.filter(r => r.studentId === s.uid);
          const filteredRecs = myRecs.filter(r => {
@@ -2217,7 +2248,19 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
             const inEnd = !historyTillDate || r.date <= historyTillDate;
             return inStart && inEnd;
          });
-         const total = filteredRecs.length;
+
+         // Sessions held = NOT student's own records, but the actual sessions conducted
+         // Theory: all batches share the same session count (one class)
+         // Lab: each batch has its own independent session count
+         let baseTotal: number;
+         if (isLabSubject) {
+            const studentBatchId = s.studentData?.batchId || '';
+            baseTotal = (labSessionsPerBatch.get(studentBatchId) || new Set()).size;
+         } else {
+            baseTotal = theorySessionsInRange.size;
+         }
+         const total = Math.max(baseTotal, filteredRecs.length);
+
          const present = filteredRecs.filter(r => r.isPresent).length;
          const pct = total === 0 ? 0 : Math.round((present / total) * 100);
          const dateRecs = myRecs.filter(r => r.date === historyFilterDate);
@@ -2257,7 +2300,9 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
       historyTillDate,
       attendanceFilter,
       attendanceThreshold,
-      attendanceOperator
+      attendanceOperator,
+      selSubjectId,
+      metaData.subjects
    ]);
 
 

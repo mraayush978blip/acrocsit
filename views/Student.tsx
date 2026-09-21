@@ -25,25 +25,35 @@ export const StudentDashboard: React.FC<StudentProps> = ({ user }) => {
          const { branchId, batchId } = user.studentData || {};
          if (!branchId || !batchId) { setLoading(false); return; }
 
-         const allAssignments = await db.getAssignments();
+         const [allAssignments, attData, marksData, facultyData, allSubs] = await Promise.all([
+            db.getAssignments(),
+            db.getStudentAttendance(user.uid),
+            db.getStudentMarks(user.uid),
+            db.getFaculty(),
+            db.getSubjects()
+         ]);
+
+         // Primary: subjects from faculty assignments for this branch+batch
          const myClassAssignments = allAssignments.filter(a =>
             a.branchId === branchId &&
             (a.batchId === batchId || a.batchId === 'ALL')
          );
          const mySubjectIds = new Set(myClassAssignments.map(a => a.subjectId));
 
-         const allSubs = await db.getSubjects();
+         // Fallback: if no assignments found (e.g. new academic year, faculty not yet assigned),
+         // derive subjects from the student's own attendance history so the portal still works.
+         if (mySubjectIds.size === 0) {
+            attData
+               .filter(r => r.subjectId !== 'sub_extra')
+               .forEach(r => mySubjectIds.add(r.subjectId));
+         }
+
          setSubjects(allSubs.filter(s => mySubjectIds.has(s.id)).sort((a, b) => a.name.localeCompare(b.name)));
-         const [attData, marksData, facultyData] = await Promise.all([
-            db.getStudentAttendance(user.uid),
-            db.getStudentMarks(user.uid),
-            db.getFaculty()
-         ]);
-         
+
          const facMap: Record<string, string> = {};
          facultyData.forEach(f => { facMap[f.uid] = f.displayName });
          setFacultyMap(facMap);
-         
+
          setAttendance(attData);
          setMarks(marksData);
          setLoading(false);

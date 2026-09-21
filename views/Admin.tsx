@@ -576,7 +576,7 @@ const ArchivedClasses: React.FC = () => {
 
   // Edit student state
   const [isEditingStudent, setIsEditingStudent] = useState(false);
-  const [editStudentForm, setEditStudentForm] = useState({ uid: '', name: '', mobile: '', enroll: '', rollNo: '' });
+  const [editStudentForm, setEditStudentForm] = useState<{ uid: string; name: string; mobile: string; enroll: string; rollNo: string; originalEnroll: string; studentObj: any | null }>({ uid: '', name: '', mobile: '', enroll: '', rollNo: '', originalEnroll: '', studentObj: null });
   const [editLoading, setEditLoading] = useState(false);
 
   // Dropdown state for class cards
@@ -715,7 +715,9 @@ const ArchivedClasses: React.FC = () => {
       name: s.displayName,
       mobile: s.studentData?.mobileNo || '',
       enroll: s.studentData?.enrollmentId || '',
-      rollNo: s.studentData?.rollNo || ''
+      rollNo: s.studentData?.rollNo || '',
+      originalEnroll: s.studentData?.enrollmentId || '',
+      studentObj: s
     });
     setIsEditingStudent(true);
   };
@@ -723,24 +725,46 @@ const ArchivedClasses: React.FC = () => {
   const handleEditStudent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedBranch || !selectedBatch) return;
-    if (!window.confirm('Are you sure you want to update this student?')) return;
+    const enrollmentChanged = editStudentForm.enroll.trim().toUpperCase() !== editStudentForm.originalEnroll.trim().toUpperCase();
+    if (enrollmentChanged) {
+      if (!window.confirm(
+        `⚠️ ENROLLMENT CHANGE DETECTED\n\n` +
+        `Old: ${editStudentForm.originalEnroll}\nNew: ${editStudentForm.enroll}\n\n` +
+        `This will:\n• Create a new login account (${editStudentForm.enroll.toLowerCase()}@acropolis.in)\n` +
+        `• Migrate ALL attendance, marks and data to the new account\n` +
+        `• Permanently delete the old login account\n\n` +
+        `This cannot be undone. Are you sure?`
+      )) return;
+    } else {
+      if (!window.confirm('Are you sure you want to update this student?')) return;
+    }
     setEditLoading(true);
     try {
-      await db.updateStudent(editStudentForm.uid, {
-        displayName: editStudentForm.name,
-        studentData: {
-          branchId: selectedBranch.id,
-          batchId: selectedBatch.id,
-          enrollmentId: editStudentForm.enroll,
-          rollNo: editStudentForm.rollNo,
-          mobileNo: editStudentForm.mobile
-        }
-      });
+      if (enrollmentChanged && editStudentForm.studentObj) {
+        // Full migration: new auth user + data transfer + old user deletion
+        await db.migrateStudentEnrollment(
+          editStudentForm.uid,
+          { ...editStudentForm.studentObj, displayName: editStudentForm.name, studentData: { ...editStudentForm.studentObj.studentData, mobileNo: editStudentForm.mobile, rollNo: editStudentForm.rollNo, branchId: selectedBranch.id, batchId: selectedBatch.id } },
+          editStudentForm.enroll.trim().toUpperCase()
+        );
+        alert(`✅ Enrollment migrated successfully!\nNew login: ${editStudentForm.enroll.trim().toLowerCase()}@acropolis.in`);
+      } else {
+        await db.updateStudent(editStudentForm.uid, {
+          displayName: editStudentForm.name,
+          studentData: {
+            branchId: selectedBranch.id,
+            batchId: selectedBatch.id,
+            enrollmentId: editStudentForm.enroll,
+            rollNo: editStudentForm.rollNo,
+            mobileNo: editStudentForm.mobile
+          }
+        });
+        alert('Student updated successfully.');
+      }
       setIsEditingStudent(false);
       const fresh = await db.getStudents(selectedBranch.id, selectedBatch.id);
       setStudents(fresh);
-      alert('Student updated successfully.');
-    } catch (err: any) { alert(err.message); } finally { setEditLoading(false); }
+    } catch (err: any) { alert(`Error: ${err.message}`); } finally { setEditLoading(false); }
   };
 
   const handleDeleteStudent = async (uid: string) => {
@@ -1047,7 +1071,7 @@ const StudentManagement: React.FC = () => {
 
   // Edit Student State
   const [isEditingStudent, setIsEditingStudent] = useState(false);
-  const [editStudentForm, setEditStudentForm] = useState({ uid: '', name: '', mobile: '', enroll: '', rollNo: '' });
+  const [editStudentForm, setEditStudentForm] = useState<{ uid: string; name: string; mobile: string; enroll: string; rollNo: string; originalEnroll: string; studentObj: any | null }>({ uid: '', name: '', mobile: '', enroll: '', rollNo: '', originalEnroll: '', studentObj: null });
 
   // Drag and Drop State
   const [draggedIdx, setDraggedIdx] = useState<number | null>(null);
@@ -1246,23 +1270,44 @@ const StudentManagement: React.FC = () => {
 
   const handleEditStudent = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!window.confirm("Are you sure you want to update this student?")) return;
+    const enrollmentChanged = editStudentForm.enroll.trim().toUpperCase() !== editStudentForm.originalEnroll.trim().toUpperCase();
+    if (enrollmentChanged) {
+      if (!window.confirm(
+        `⚠️ ENROLLMENT CHANGE DETECTED\n\n` +
+        `Old: ${editStudentForm.originalEnroll}\nNew: ${editStudentForm.enroll}\n\n` +
+        `This will:\n• Create a new login account (${editStudentForm.enroll.toLowerCase()}@acropolis.in)\n` +
+        `• Migrate ALL attendance, marks and data to the new account\n` +
+        `• Permanently delete the old login account\n\n` +
+        `This cannot be undone. Are you sure?`
+      )) return;
+    } else {
+      if (!window.confirm("Are you sure you want to update this student?")) return;
+    }
     setLoading(true);
     try {
-      await db.updateStudent(editStudentForm.uid, {
-        displayName: editStudentForm.name,
-        studentData: {
-          branchId: branchId!,
-          batchId: batchId!,
-          enrollmentId: editStudentForm.enroll,
-          rollNo: editStudentForm.rollNo,
-          mobileNo: editStudentForm.mobile
-        }
-      });
+      if (enrollmentChanged && editStudentForm.studentObj) {
+        await db.migrateStudentEnrollment(
+          editStudentForm.uid,
+          { ...editStudentForm.studentObj, displayName: editStudentForm.name, studentData: { ...editStudentForm.studentObj.studentData, mobileNo: editStudentForm.mobile, rollNo: editStudentForm.rollNo, branchId: branchId!, batchId: batchId! } },
+          editStudentForm.enroll.trim().toUpperCase()
+        );
+        alert(`✅ Enrollment migrated successfully!\nNew login: ${editStudentForm.enroll.trim().toLowerCase()}@acropolis.in`);
+      } else {
+        await db.updateStudent(editStudentForm.uid, {
+          displayName: editStudentForm.name,
+          studentData: {
+            branchId: branchId!,
+            batchId: batchId!,
+            enrollmentId: editStudentForm.enroll,
+            rollNo: editStudentForm.rollNo,
+            mobileNo: editStudentForm.mobile
+          }
+        });
+        alert("Student updated");
+      }
       setIsEditingStudent(false);
       setStudents(await db.getStudents(branchId!, batchId!));
-      alert("Student updated");
-    } catch (err: any) { alert(err.message); } finally { setLoading(false); }
+    } catch (err: any) { alert(`Error: ${err.message}`); } finally { setLoading(false); }
   };
 
   const startEditStudent = (s: User) => {
@@ -1271,7 +1316,9 @@ const StudentManagement: React.FC = () => {
       name: s.displayName,
       mobile: s.studentData?.mobileNo || '',
       enroll: s.studentData?.enrollmentId || '',
-      rollNo: s.studentData?.rollNo || ''
+      rollNo: s.studentData?.rollNo || '',
+      originalEnroll: s.studentData?.enrollmentId || '',
+      studentObj: s
     });
     setIsEditingStudent(true);
   };
