@@ -4,7 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import { db } from '../services/db';
 import { User, Notification } from '../types';
 import { Card, Button } from '../components/UI';
-import { Bell, Check, X, Clock, Trash2, RefreshCw, ArrowLeft } from 'lucide-react';
+import { Bell, Check, X, Clock, Trash2, RefreshCw, ArrowLeft, ArrowRightLeft } from 'lucide-react';
+import { OverwriteShiftModal } from '../components/OverwriteShiftModal';
 
 interface NotificationsProps {
     user: User;
@@ -14,6 +15,8 @@ export const NotificationsPage: React.FC<NotificationsProps> = ({ user }) => {
     const navigate = useNavigate();
     const [notifications, setNotifications] = useState<Notification[]>([]);
     const [loading, setLoading] = useState(true);
+    const [overwriteModalNotif, setOverwriteModalNotif] = useState<Notification | null>(null);
+    const [successBanner, setSuccessBanner] = useState<string>('');
     // Track local changes to handle DB lag/flicker
     const [actionedStatuses, setActionedStatuses] = useState<Record<string, 'APPROVED' | 'DENIED'>>({});
     const [deletedIds, setDeletedIds] = useState<Set<string>>(new Set());
@@ -177,6 +180,18 @@ export const NotificationsPage: React.FC<NotificationsProps> = ({ user }) => {
                 </div>
             </div>
 
+            {successBanner && (
+                <div className="p-4 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs font-bold flex items-center justify-between shadow-sm animate-in slide-in-from-top-2 duration-200">
+                    <span className="flex items-center gap-2">
+                        <Check className="h-4 w-4 text-emerald-600 shrink-0" />
+                        {successBanner}
+                    </span>
+                    <button onClick={() => setSuccessBanner('')} className="p-1 text-emerald-600 hover:text-emerald-900 rounded">
+                        <X className="h-3.5 w-3.5" />
+                    </button>
+                </div>
+            )}
+
             {loading ? (
                 <div className="flex justify-center p-12 text-slate-400">Loading notifications...</div>
             ) : notifications.length === 0 ? (
@@ -228,13 +243,35 @@ export const NotificationsPage: React.FC<NotificationsProps> = ({ user }) => {
                                 </div>
 
                                 {n.status === 'PENDING' && (
-                                    <div className="mt-4 flex justify-end gap-2 pt-3 border-t border-slate-100/50">
-                                        {(n.type === 'OVERWRITE_REQUEST' || n.type === 'RESTORE_REQUEST') ? (
+                                    <div className="mt-4 flex flex-wrap justify-end gap-2 pt-3 border-t border-slate-100/50">
+                                        {n.type === 'OVERWRITE_REQUEST' ? (
+                                            <>
+                                                <Button
+                                                    size="sm"
+                                                    onClick={() => setOverwriteModalNotif(n)}
+                                                    className="bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1.5 shadow-sm"
+                                                >
+                                                    <ArrowRightLeft className="h-3.5 w-3.5" />
+                                                    Review & Shift / Overwrite
+                                                </Button>
+                                                <Button
+                                                    variant="secondary"
+                                                    size="sm"
+                                                    onClick={() => handleAction(n, 'DENY')}
+                                                    className="text-rose-600 hover:bg-rose-50 border-rose-200 flex items-center gap-1"
+                                                >
+                                                    <X className="h-3.5 w-3.5" />
+                                                    Deny
+                                                </Button>
+                                            </>
+                                        ) : n.type === 'RESTORE_REQUEST' ? (
                                             <Button size="sm" onClick={() => handleAction(n, 'APPROVE')} className="bg-indigo-600">
-                                                {n.type === 'RESTORE_REQUEST' ? 'Approve Restoration' : 'Approve Overwrite'}
+                                                Approve Restoration
                                             </Button>
                                         ) : (
-                                            <Button variant="secondary" size="sm" onClick={() => deleteNotif(n.id)} className="text-red-600 hover:bg-red-50 border-red-100">Delete</Button>
+                                            <Button variant="secondary" size="sm" onClick={() => deleteNotif(n.id)} className="text-red-600 hover:bg-red-50 border-red-100">
+                                                Delete
+                                            </Button>
                                         )}
                                     </div>
                                 )}
@@ -243,6 +280,22 @@ export const NotificationsPage: React.FC<NotificationsProps> = ({ user }) => {
                     ))}
                 </div>
             )}
+
+            {/* Overwrite & Shift Attendance Modal */}
+            <OverwriteShiftModal
+                isOpen={!!overwriteModalNotif}
+                onClose={() => setOverwriteModalNotif(null)}
+                notification={overwriteModalNotif}
+                currentUser={user}
+                onSuccess={(msg) => {
+                    setSuccessBanner(msg);
+                    setTimeout(() => setSuccessBanner(''), 7000);
+                    fetchNotifs(true);
+                }}
+                onDenySuccess={() => {
+                    fetchNotifs(true);
+                }}
+            />
         </div>
     );
 };

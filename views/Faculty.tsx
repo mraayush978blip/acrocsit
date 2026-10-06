@@ -1,15 +1,17 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import ExcelJS from 'exceljs';
 import { db } from '../services/db';
-import { User, FacultyAssignment, AttendanceRecord, Batch, Subject, Mark, MidSemType } from '../types';
+import { User, FacultyAssignment, AttendanceRecord, Batch, Subject, Mark, MidSemType, Notification } from '../types';
 import { Button, Card, Modal, Input, Select, ExportProgressModal } from '../components/UI';
 import {
    Save, History, FileDown, Filter, ArrowLeft, CheckCircle2, ChevronDown, Check, X,
    CheckSquare, Square, XCircle, AlertCircle, AlertTriangle, Trash, Loader2,
-   Calendar, RefreshCw, Layers, Eye, BookOpen, User as UserIcon, Activity, Users, Trophy, Upload, Share2
+   Calendar, RefreshCw, Layers, Eye, BookOpen, User as UserIcon, Activity, Users, Trophy, Upload, Share2,
+   Search, UserCheck, UserX, ChevronRight, ArrowRightLeft
 } from 'lucide-react';
 import { useNavigate, useLocation, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { Skeleton, SkeletonRow, SkeletonCard } from '../components/Skeleton';
+import { OverwriteShiftModal } from '../components/OverwriteShiftModal';
 
 interface FacultyProps { user: User; forceCoordinatorView?: boolean; }
 
@@ -1968,6 +1970,22 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
    const [showDeleteModal, setShowDeleteModal] = useState(false);
    const [slotsToDeleteInModal, setSlotsToDeleteInModal] = useState<number[]>([]);
    const [isDeleting, setIsDeleting] = useState(false);
+   const [historySearchQuery, setHistorySearchQuery] = useState('');
+   const [historyQuickFilter, setHistoryQuickFilter] = useState<'ALL' | 'LOW' | 'GOOD' | 'PRESENT' | 'ABSENT'>('ALL');
+   const [studentTimelineFilter, setStudentTimelineFilter] = useState<'ALL' | 'PRESENT' | 'ABSENT'>('ALL');
+
+   // Overwrite Resolution State
+   const [pendingOverwrites, setPendingOverwrites] = useState<Notification[]>([]);
+   const [activeOverwriteNotif, setActiveOverwriteNotif] = useState<Notification | null>(null);
+
+   const refreshPendingOverwrites = async () => {
+      try {
+         const notifs = await db.getNotifications(user.uid);
+         setPendingOverwrites(notifs.filter(n => n.type === 'OVERWRITE_REQUEST' && n.status === 'PENDING'));
+      } catch (e) {
+         // silent
+      }
+   };
 
    // Export Flow State
    const [showExportModal, setShowExportModal] = useState(false);
@@ -2031,6 +2049,7 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
          setCoordinatorBranchIds(coordIds);
          if (coordIds.length > 0) setCoordinatorBranchId(coordIds[0]); // Default to first coordinator branch
          setLoadingInit(false);
+         refreshPendingOverwrites();
       };
       init();
    }, [user.uid]);
@@ -2211,53 +2230,69 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
 
    // Memoized History Data Processing for high performance
    const historyProcessedData = useMemo(() => {
-      if (activeTab !== 'HISTORY') return { filteredStudents: [], batchGroupMap: new Map(), studentStats: new Map() };
+      const emptySummary = {
+         totalEnrolled: 0,
+         totalSessionsConducted: 0,
+         overallAvgPct: 0,
+         defaulterCount: 0,
+         goodCount: 0,
+         dateSlots: [] as number[],
+         datePresentCount: 0,
+         dateAbsentCount: 0,
+         dateTurnoutPct: 0
+      };
+
+      if (activeTab !== 'HISTORY') return { filteredStudents: [], batchGroupMap: new Map(), studentStats: new Map(), summaryStats: emptySummary };
 
       // 1. Statistics Calculation (Pre-compute per-student stats for the selected period)
-      const statsMap = new Map<string, { total: number, present: number, pct: number, filteredRecs: AttendanceRecord[], dateRecs: AttendanceRecord[] }>();
+      const statsMap = new Map<string, {
+         total: number;
+         present: number;
+         pct: number;
+         filteredRecs: AttendanceRecord[];
+         dateRecs: AttendanceRecord[];
+         isDatePresent: boolean;
+         isDateAbsent: boolean;
+         neededFor75: number;
+      }>();
 
       // Determine subject type for correct session counting
       const currentSubject = metaData.subjects[selSubjectId];
       const isLabSubject = currentSubject?.type === 'lab';
 
       // For THEORY: sessions are branch-wide (same for all batches — one class for everyone)
-      // Pre-compute theory sessions once (unique date_slot across all records of this subject in date range)
       const theorySessionsInRange = new Set(
          allClassRecords
             .filter(r => {
                const inStart = !historyStartDate || r.date >= historyStartDate;
                const inEnd = !historyTillDate || r.date <= historyTillDate;
-               return inStart && inEnd;
+               return inStart && inEnd && r.subjectId === selSubjectId;
             })
-            .map(r => `${r.date}_${r.lectureSlot}`)
+            .map(r => `${r.date}_${r.lectureSlot || 1}`)
       );
 
       // For LAB: sessions are per-batch (different batches have different lab sessions)
-      // Pre-compute lab sessions per batchId
       const labSessionsPerBatch = new Map<string, Set<string>>();
       allClassRecords
          .filter(r => {
             const inStart = !historyStartDate || r.date >= historyStartDate;
             const inEnd = !historyTillDate || r.date <= historyTillDate;
-            return inStart && inEnd;
+            return inStart && inEnd && r.subjectId === selSubjectId;
          })
          .forEach(r => {
             const bId = r.batchId;
             if (!labSessionsPerBatch.has(bId)) labSessionsPerBatch.set(bId, new Set());
-            labSessionsPerBatch.get(bId)!.add(`${r.date}_${r.lectureSlot}`);
+            labSessionsPerBatch.get(bId)!.add(`${r.date}_${r.lectureSlot || 1}`);
          });
 
       visibleStudents.forEach(s => {
-         const myRecs = allClassRecords.filter(r => r.studentId === s.uid);
+         const myRecs = allClassRecords.filter(r => r.studentId === s.uid && r.subjectId === selSubjectId);
          const filteredRecs = myRecs.filter(r => {
             const inStart = !historyStartDate || r.date >= historyStartDate;
             const inEnd = !historyTillDate || r.date <= historyTillDate;
             return inStart && inEnd;
          });
 
-         // Sessions held = NOT student's own records, but the actual sessions conducted
-         // Theory: all batches share the same session count (one class)
-         // Lab: each batch has its own independent session count
          let baseTotal: number;
          if (isLabSubject) {
             const studentBatchId = s.studentData?.batchId || '';
@@ -2270,21 +2305,96 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
          const present = filteredRecs.filter(r => r.isPresent).length;
          const pct = total === 0 ? 0 : Math.round((present / total) * 100);
          const dateRecs = myRecs.filter(r => r.date === historyFilterDate);
+         const isDatePresent = dateRecs.length > 0 && dateRecs.some(r => r.isPresent);
+         const isDateAbsent = dateRecs.length > 0 && dateRecs.every(r => !r.isPresent);
 
-         statsMap.set(s.uid, { total, present, pct, filteredRecs, dateRecs });
+         // Calculate how many consecutive classes needed to reach 75%
+         // (present + x) / (total + x) >= 0.75 => x >= 3*total - 4*present
+         const neededFor75 = pct < 75 ? Math.max(1, Math.ceil(3 * total - 4 * present)) : 0;
+
+         statsMap.set(s.uid, {
+            total,
+            present,
+            pct,
+            filteredRecs,
+            dateRecs,
+            isDatePresent,
+            isDateAbsent,
+            neededFor75
+         });
       });
 
-      // 2. Filtration Logic (Apply UI filters on score threshold)
+      // Compute Summary Stats
+      let sumPct = 0;
+      let defaulterCount = 0;
+      let goodCount = 0;
+      let datePresentCount = 0;
+      let dateAbsentCount = 0;
+
+      visibleStudents.forEach(s => {
+         const stat = statsMap.get(s.uid)!;
+         sumPct += stat.pct;
+         if (stat.pct < 75) defaulterCount++;
+         else goodCount++;
+         if (stat.isDatePresent) datePresentCount++;
+         else if (stat.isDateAbsent) dateAbsentCount++;
+      });
+
+      const overallAvgPct = visibleStudents.length > 0 ? Math.round(sumPct / visibleStudents.length) : 0;
+      const dateTurnoutPct = visibleStudents.length > 0 ? Math.round((datePresentCount / visibleStudents.length) * 100) : 0;
+
+      const dateRecords = allClassRecords.filter(r => r.date === historyFilterDate && r.subjectId === selSubjectId);
+      const dateSlots = Array.from(new Set(dateRecords.map(r => r.lectureSlot || 1))).sort((a, b) => (a as number) - (b as number)) as number[];
+
+      const totalSessionsConducted = isLabSubject
+         ? Math.max(...Array.from(labSessionsPerBatch.values()).map(s => s.size), 0)
+         : theorySessionsInRange.size;
+
+      const summaryStats = {
+         totalEnrolled: visibleStudents.length,
+         totalSessionsConducted,
+         overallAvgPct,
+         defaulterCount,
+         goodCount,
+         dateSlots,
+         datePresentCount,
+         dateAbsentCount,
+         dateTurnoutPct
+      };
+
+      // 2. Filtration Logic
       const filtered = visibleStudents.filter(s => {
-         if (historyFilterDate) return true;
-         if (attendanceFilter === 'CUSTOM') {
-            const stats = statsMap.get(s.uid)!;
+         const stats = statsMap.get(s.uid)!;
+
+         // Search Query Filter
+         if (historySearchQuery.trim()) {
+            const q = historySearchQuery.trim().toLowerCase();
+            const name = (s.displayName || '').toLowerCase();
+            const roll = (s.studentData?.rollNo || '').toLowerCase();
+            const enrol = (s.studentData?.enrollmentId || '').toLowerCase();
+            if (!name.includes(q) && !roll.includes(q) && !enrol.includes(q)) {
+               return false;
+            }
+         }
+
+         // Quick Filter
+         if (historyFilterDate) {
+            if (historyQuickFilter === 'PRESENT' && !stats.isDatePresent) return false;
+            if (historyQuickFilter === 'ABSENT' && !stats.isDateAbsent) return false;
+         } else {
+            if (historyQuickFilter === 'LOW' && stats.pct >= 75) return false;
+            if (historyQuickFilter === 'GOOD' && stats.pct < 75) return false;
+         }
+
+         // Advanced Custom Score Filter
+         if (!historyFilterDate && attendanceFilter === 'CUSTOM') {
             const pct = stats.pct;
             if (attendanceOperator === 'GE') return pct >= attendanceThreshold;
             if (attendanceOperator === 'LE') return pct <= attendanceThreshold;
             if (attendanceOperator === 'GT') return pct > attendanceThreshold;
             if (attendanceOperator === 'LT') return pct < attendanceThreshold;
          }
+
          return true;
       });
 
@@ -2296,7 +2406,7 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
          batchGroupMap.get(bId)!.push(s);
       });
 
-      return { filteredStudents: filtered, batchGroupMap, studentStats: statsMap };
+      return { filteredStudents: filtered, batchGroupMap, studentStats: statsMap, summaryStats };
    }, [
       activeTab,
       visibleStudents,
@@ -2304,6 +2414,8 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
       historyFilterDate,
       historyStartDate,
       historyTillDate,
+      historySearchQuery,
+      historyQuickFilter,
       attendanceFilter,
       attendanceThreshold,
       attendanceOperator,
@@ -3208,78 +3320,232 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
       const pct = total === 0 ? 0 : Math.round((present / total) * 100);
 
       return (
-         <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-            <div className="bg-white p-6 rounded-3xl shadow-xl shadow-slate-100 border border-slate-100">
-               <div className="flex items-center justify-between mb-8">
-                  <button onClick={() => setViewHistoryStudent(null)} className="h-10 w-10 flex items-center justify-center bg-slate-50 text-slate-600 rounded-xl hover:bg-slate-100 transition-all active:scale-95 shadow-sm">
-                     <ArrowLeft className="h-5 w-5" />
+         <div className="space-y-5 animate-in fade-in slide-in-from-right-4 duration-300 pb-20">
+            {/* Top Navigation */}
+            <div className="flex items-center justify-between pb-1">
+               <button
+                  onClick={() => { setViewHistoryStudent(null); setStudentTimelineFilter('ALL'); }}
+                  className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold text-slate-700 hover:text-slate-900 bg-white hover:bg-slate-50 border border-slate-200 transition-all shadow-xs active:scale-95"
+               >
+                  <ArrowLeft className="h-4 w-4" />
+                  <span>Back to Attendance List</span>
+               </button>
+
+               <div className="text-right">
+                  <span className="text-xs font-black text-slate-700 uppercase tracking-tight">
+                     {currentSubject?.name || 'Subject'}
+                  </span>
+                  <span className="text-xs font-mono font-bold text-slate-400 ml-1.5">
+                     ({currentSubject?.code || 'CS'})
+                  </span>
+               </div>
+            </div>
+
+            {/* Student Profile Card */}
+            <div className="bg-white p-5 sm:p-6 rounded-3xl border border-slate-200/80 shadow-sm space-y-4">
+               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="flex items-center gap-3.5">
+                     <div className="w-12 h-12 rounded-2xl bg-indigo-600 text-white font-black text-lg flex items-center justify-center shrink-0 shadow-sm">
+                        {viewHistoryStudent.displayName?.charAt(0) || 'S'}
+                     </div>
+                     <div>
+                        <h3 className="text-lg font-black text-slate-900 leading-tight">
+                           {viewHistoryStudent.displayName}
+                        </h3>
+                        <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                           <span className="text-xs font-mono font-bold text-indigo-700 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-md">
+                              {viewHistoryStudent.studentData?.enrollmentId || 'N/A'}
+                           </span>
+                           <span className="text-xs font-bold text-slate-500">
+                              Roll No: #{viewHistoryStudent.studentData?.rollNo || '-'}
+                           </span>
+                           <span className="text-xs font-bold text-slate-400">
+                              • Batch: {metaData.batches[studentBatchId] || studentBatchId || 'General'}
+                           </span>
+                        </div>
+                     </div>
+                  </div>
+
+                  {/* Summary Metric Pills */}
+                  <div className="flex items-center gap-4 sm:gap-6 self-start sm:self-auto">
+                     <div className="text-right">
+                        <div className={`text-2xl font-black leading-none ${pct < 75 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                           {pct}%
+                        </div>
+                        <div className="text-[11px] font-bold text-slate-400 mt-1">
+                           {present} of {total} Sessions Attended
+                        </div>
+                     </div>
+
+                     <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded-2xl text-xs font-bold shrink-0">
+                        <span className="px-3 py-1.5 bg-white text-emerald-700 rounded-xl shadow-xs flex items-center gap-1.5">
+                           <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                           {present} Present
+                        </span>
+                        <span className="px-3 py-1.5 text-rose-700 flex items-center gap-1.5">
+                           <span className="w-2 h-2 rounded-full bg-rose-500"></span>
+                           {total - present} Absent
+                        </span>
+                     </div>
+                  </div>
+               </div>
+
+               {/* Progress Bar */}
+               <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
+                  <div
+                     className={`h-full transition-all duration-700 ${pct < 75 ? 'bg-rose-500' : 'bg-emerald-500'}`}
+                     style={{ width: `${Math.min(100, pct)}%` }}
+                  />
+               </div>
+
+               {pct < 75 && (
+                  <div className="flex items-center gap-2 p-3 bg-rose-50 border border-rose-100 rounded-2xl text-xs font-bold text-rose-700">
+                     <AlertCircle className="h-4 w-4 shrink-0 text-rose-500" />
+                     <span>
+                        Attendance Shortage (&lt;75%): Student requires {Math.max(1, Math.ceil(3 * total - 4 * present))} consecutive attended lecture(s) to reach 75%.
+                     </span>
+                  </div>
+               )}
+            </div>
+
+            {/* Timeline Section & Segmented Filter Tabs */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
+               <div>
+                  <h4 className="text-sm font-black text-slate-800 uppercase tracking-tight">Attendance Timeline</h4>
+                  <p className="text-xs text-slate-500 font-medium">Detailed log of all conducted classes for this student</p>
+               </div>
+
+               {/* Segmented Filter Control */}
+               <div className="flex items-center bg-slate-100 p-1 rounded-2xl text-xs font-bold self-start sm:self-auto">
+                  <button
+                     onClick={() => setStudentTimelineFilter('ALL')}
+                     className={`px-3.5 py-1.5 rounded-xl transition-all ${
+                        studentTimelineFilter === 'ALL'
+                           ? 'bg-white text-slate-900 shadow-xs'
+                           : 'text-slate-600 hover:text-slate-900'
+                     }`}
+                  >
+                     All Sessions ({total})
                   </button>
-                  <div className="text-right">
-                     <div className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-1 leading-none">Attendance Score</div>
-                     <div className={`text-2xl font-black ${pct < 75 ? 'text-rose-600' : 'text-emerald-600'}`}>{pct}%</div>
-                  </div>
-               </div>
-
-               <div className="flex items-center gap-4 mb-6">
-                  <div className="h-16 w-16 rounded-2xl bg-indigo-50 flex items-center justify-center text-indigo-600 border-2 border-indigo-100 font-black text-2xl uppercase">
-                     {viewHistoryStudent.displayName?.charAt(0)}
-                  </div>
-                  <div>
-                     <h3 className="text-lg font-black text-slate-900 tracking-tight leading-none mb-1.5">{viewHistoryStudent.displayName}</h3>
-                     <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-bold py-0.5 px-2 bg-slate-100 text-slate-900 rounded-lg">{viewHistoryStudent.studentData?.enrollmentId}</span>
-                        <div className="h-1 w-1 bg-slate-300 rounded-full"></div>
-                        <span className="text-[10px] font-bold text-slate-400 italic">Sr No: {viewHistoryStudent.studentData?.rollNo || '-'}</span>
-                     </div>
-                  </div>
-               </div>
-
-               <div className="grid grid-cols-2 gap-3 pb-2">
-                  <div className="bg-emerald-50 p-3 rounded-2xl border border-emerald-100 flex items-center gap-3">
-                     <div className="h-8 w-8 rounded-lg bg-emerald-500/20 flex items-center justify-center text-emerald-600 font-black">P</div>
-                     <div>
-                        <div className="text-[10px] font-black text-emerald-600/60 uppercase leading-none mb-1">Present</div>
-                        <div className="text-sm font-black text-emerald-700 leading-none">{present}</div>
-                     </div>
-                  </div>
-                  <div className="bg-rose-50 p-3 rounded-2xl border border-rose-100 flex items-center gap-3">
-                     <div className="h-8 w-8 rounded-lg bg-rose-500/20 flex items-center justify-center text-rose-600 font-black">A</div>
-                     <div>
-                        <div className="text-[10px] font-black text-rose-600/60 uppercase leading-none mb-1">Absent</div>
-                        <div className="text-sm font-black text-rose-700 leading-none">{total - present}</div>
-                     </div>
-                  </div>
+                  <button
+                     onClick={() => setStudentTimelineFilter('PRESENT')}
+                     className={`px-3.5 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+                        studentTimelineFilter === 'PRESENT'
+                           ? 'bg-white text-emerald-700 shadow-xs'
+                           : 'text-slate-600 hover:text-slate-900'
+                     }`}
+                  >
+                     <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                     Present ({present})
+                  </button>
+                  <button
+                     onClick={() => setStudentTimelineFilter('ABSENT')}
+                     className={`px-3.5 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+                        studentTimelineFilter === 'ABSENT'
+                           ? 'bg-white text-rose-700 shadow-xs'
+                           : 'text-slate-600 hover:text-slate-900'
+                     }`}
+                  >
+                     <span className="w-2 h-2 rounded-full bg-rose-500"></span>
+                     Absent ({total - present})
+                  </button>
                </div>
             </div>
 
-            <div className="space-y-3">
-               <div className="flex items-center justify-between px-2">
-                  <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Attendance Timeline</h4>
-                  <div className="h-[1px] flex-1 bg-slate-100 mx-4"></div>
-               </div>
+            {/* Timeline Session Entries List */}
+            {(() => {
+               const displayedRecords = studentRecords.filter(r => {
+                  if (studentTimelineFilter === 'PRESENT') return r.isPresent;
+                  if (studentTimelineFilter === 'ABSENT') return !r.isPresent;
+                  return true;
+               });
 
-               <div className="grid grid-cols-2 xs:grid-cols-3 gap-3 pb-10">
-                  {studentRecords.map(r => (
-                     <div key={r.id} className={`group relative p-4 rounded-2xl border transition-all hover:shadow-lg ${r.isPresent ? 'bg-white border-emerald-100/50' : 'bg-rose-50/30 border-rose-100'}`}>
-                        <div className={`absolute top-0 right-0 h-10 w-10 rounded-bl-full opacity-10 ${r.isPresent ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
-                        <div className="text-[10px] font-bold text-slate-400 mb-1 group-hover:text-slate-600 transition-colors">{r.date.split('-').reverse().slice(0, 2).join('/')}</div>
-                        <div className={`text-sm font-black leading-none mb-2 ${r.isPresent ? 'text-emerald-600' : 'text-rose-600'}`}>
-                           {r.isPresent ? 'PRESENT' : 'ABSENT'}
-                        </div>
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                           <div className="inline-flex items-center px-2 py-0.5 rounded-lg bg-slate-100/50 text-[9px] font-black text-slate-500 group-hover:bg-indigo-50 group-hover:text-indigo-600 transition-colors">
-                              SLOT {r.lectureSlot || 1}
+               if (displayedRecords.length === 0) {
+                  return (
+                     <div className="bg-white p-12 rounded-3xl border border-slate-200/80 text-center space-y-2">
+                        <Calendar className="h-8 w-8 text-slate-300 mx-auto" />
+                        <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">
+                           No {studentTimelineFilter.toLowerCase()} sessions recorded
+                        </p>
+                     </div>
+                  );
+               }
+
+               return (
+                  <div className="bg-white rounded-3xl border border-slate-200/80 divide-y divide-slate-100 overflow-hidden shadow-xs">
+                     {displayedRecords.map((r, idx) => {
+                        const parts = r.date.split('-');
+                        const dateObj = parts.length === 3 ? new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2])) : new Date(r.date);
+                        const formattedDate = dateObj.toLocaleDateString('en-IN', {
+                           day: '2-digit',
+                           month: 'short',
+                           year: 'numeric'
+                        });
+                        const weekday = dateObj.toLocaleDateString('en-IN', { weekday: 'long' });
+
+                        return (
+                           <div
+                              key={r.id || idx}
+                              className="p-4 sm:px-6 sm:py-4.5 flex items-center justify-between gap-3 hover:bg-slate-50/80 transition-colors"
+                           >
+                              <div className="flex items-center gap-3.5 sm:gap-4 min-w-0">
+                                 {/* Status Icon Indicator */}
+                                 <div
+                                    className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 ${
+                                       r.isPresent
+                                          ? 'bg-emerald-50 text-emerald-600 border border-emerald-100'
+                                          : 'bg-rose-50 text-rose-600 border border-rose-100'
+                                    }`}
+                                 >
+                                    {r.isPresent ? (
+                                       <Check className="h-4 w-4" strokeWidth={3} />
+                                    ) : (
+                                       <X className="h-4 w-4" strokeWidth={3} />
+                                    )}
+                                 </div>
+
+                                 {/* Date & Slot Details */}
+                                 <div className="min-w-0">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                       <span className="text-sm font-bold text-slate-900">
+                                          {formattedDate}
+                                       </span>
+                                       <span className="text-xs font-medium text-slate-400">
+                                          • {weekday}
+                                       </span>
+                                       <span className="px-2 py-0.5 rounded-lg bg-slate-100 text-slate-700 text-[11px] font-bold">
+                                          Slot {r.lectureSlot || 1}
+                                       </span>
+                                    </div>
+
+                                    {r.reason && (
+                                       <p className="text-[11px] text-slate-400 font-medium italic mt-0.5 truncate">
+                                          Note: {r.reason}
+                                       </p>
+                                    )}
+                                 </div>
+                              </div>
+
+                              {/* Status Badge */}
+                              <div className="shrink-0">
+                                 {r.isPresent ? (
+                                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                                       Present
+                                    </span>
+                                 ) : (
+                                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                                       <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+                                       Absent
+                                    </span>
+                                 )}
+                              </div>
                            </div>
-                           {r.reason && (
-                              <span className="text-[9px] font-bold text-rose-500 bg-rose-50 px-1.5 py-0.5 rounded-md border border-rose-100">
-                                 {r.reason}
-                              </span>
-                           )}
-                        </div>
-                     </div>
-                  ))}
-               </div>
-            </div>
+                        );
+                     })}
+                  </div>
+               );
+            })()}
          </div>
       );
    }
@@ -3320,6 +3586,34 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
 
    return (
       <div className={`w-full overflow-x-hidden space-y-6 ${showDashboard || forceCoordinatorView ? 'pb-32' : 'pb-6'}`}>
+         {/* Pending Overwrite Request Alert Banner */}
+         {pendingOverwrites.length > 0 && (
+            <div className="bg-amber-50/90 border-2 border-amber-300 rounded-2xl p-4 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-in fade-in duration-300">
+               <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-xl bg-amber-500 text-white shrink-0 shadow-xs">
+                     <ArrowRightLeft className="h-5 w-5" />
+                  </div>
+                  <div>
+                     <h4 className="text-sm font-black text-amber-950 flex items-center gap-2">
+                        Pending Overwrite Request ({pendingOverwrites.length})
+                        <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-amber-200 text-amber-900">Action Required</span>
+                     </h4>
+                     <p className="text-xs text-amber-800">
+                        {pendingOverwrites[0].fromUserName} requested to overwrite <span className="font-bold underline">Slot {pendingOverwrites[0].data.slot}</span> on {pendingOverwrites[0].data.date}. You can shift your session to any blank slot of that day.
+                     </p>
+                  </div>
+               </div>
+               <Button
+                  size="sm"
+                  onClick={() => setActiveOverwriteNotif(pendingOverwrites[0])}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white shrink-0 flex items-center gap-1.5 shadow-sm px-4 py-2"
+               >
+                  <ArrowRightLeft className="h-3.5 w-3.5" />
+                  Review & Shift Slot
+               </Button>
+            </div>
+         )}
+
          {/* 1. Command Center / Top Bar */}
          {!forceCoordinatorView && (
             <div className="bg-gradient-to-br from-indigo-900 to-indigo-800 p-5 rounded-3xl mb-2 shadow-xl shadow-indigo-200/50 border border-indigo-700/30">
@@ -3690,281 +3984,689 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
 
          {activeTab === 'HISTORY' && (
             !showDashboard ? <SelectionPrompt /> : (
-               <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-                  <div className="bg-white p-4 rounded-3xl border border-slate-100 shadow-xl shadow-slate-100 mb-6">
-                     <div className="flex flex-col gap-4">
-                        <div className="flex items-center justify-between px-1">
-                           <h3 className="text-xs sm:text-sm font-black text-slate-800 uppercase tracking-tight truncate mr-2">Attendance History</h3>
-                           <div className="flex items-center gap-1.5">
-                              {historyFilterDate && (
-                                 <button
-                                    onClick={() => {
-                                       const dayRecs = allClassRecords.filter(r => r.date === historyFilterDate);
-                                       const daySlots = Array.from(new Set(dayRecs.map(r => r.lectureSlot))).filter(Boolean).sort() as number[];
-                                       setSlotsToDeleteInModal(daySlots);
-                                       setShowDeleteModal(true);
-                                    }}
-                                    className="h-8 px-2.5 bg-rose-50 text-rose-600 rounded-lg flex items-center gap-1.5 active:scale-95 transition-all"
-                                 >
-                                    <Trash className="h-3.5 w-3.5" />
-                                    <span className="text-[9px] font-black tracking-widest uppercase hidden xs:inline">Delete</span>
-                                 </button>
-                              )}
-                              <button
-                                 onClick={() => setShowFilters(!showFilters)}
-                                 className={`h-8 px-2.5 flex items-center gap-1.5 rounded-lg transition-all ${showFilters ? 'bg-indigo-600 text-white' : 'bg-slate-50 text-slate-500'}`}
-                              >
-                                 <Filter className="h-3.5 w-3.5" />
-                                 <span className="text-[9px] font-black tracking-widest uppercase hidden xs:inline">Filters</span>
-                              </button>
+               <div className="space-y-5 animate-in fade-in slide-in-from-bottom-2 duration-300 pb-20">
+                  {/* 1. Header & Summary KPI Dashboard */}
+                  <div className="bg-white p-4 sm:p-6 rounded-3xl border border-slate-100 shadow-xl shadow-slate-100/60 space-y-5">
+                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div>
+                           <div className="flex items-center gap-2">
+                              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black tracking-wider uppercase bg-indigo-50 text-indigo-700 border border-indigo-100">
+                                 {metaData.subjects[selSubjectId]?.name || 'Subject'}
+                              </span>
+                              <span className="text-xs font-mono font-bold text-slate-400">
+                                 {metaData.subjects[selSubjectId]?.code}
+                              </span>
                            </div>
+                           <h3 className="text-lg sm:text-xl font-black text-slate-900 tracking-tight mt-1">
+                              Preview Attendance & Reports
+                           </h3>
+                           <p className="text-xs text-slate-500 font-medium">
+                              {historyFilterDate
+                                 ? (() => {
+                                      const parts = historyFilterDate.split('-');
+                                      const d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+                                      return `Viewing class attendance on ${d.toLocaleDateString('en-IN', { weekday: 'long', day: '2-digit', month: 'short', year: 'numeric' })}`;
+                                   })()
+                                 : 'Class attendance progress, defaulter alerts (<75%), and session history.'}
+                           </p>
                         </div>
 
-                        <div className="flex items-center gap-2 overflow-x-auto scrollbar-none pb-1">
-                           <div className="flex-1 min-w-[120px] relative">
-                              <label className="absolute left-3 top-2 text-[8px] font-black text-slate-400 uppercase tracking-[0.2em]">View Date</label>
-                              <input
-                                 type="date"
-                                 value={historyFilterDate}
-                                 onChange={e => { setHistoryFilterDate(e.target.value); setHistoryTillDate(''); }}
-                                 className="w-full pl-3 pr-3 pt-5 pb-1.5 bg-slate-50 border border-transparent rounded-2xl text-[11px] font-bold text-slate-900 focus:bg-white focus:border-indigo-100 focus:outline-none transition-all appearance-none"
-                              />
-                              {historyFilterDate && <button onClick={() => setHistoryFilterDate('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500"><XCircle className="h-3.5 w-3.5" /></button>}
-                           </div>
+                        {/* Top Action Buttons (Export, Share, Delete) */}
+                        <div className="flex items-center gap-2 self-stretch sm:self-auto flex-wrap">
                            <button
                               onClick={handleExportCSV}
-                              className="h-12 px-5 bg-indigo-50 text-indigo-700 rounded-2xl flex items-center gap-2 active:scale-95 transition-all"
+                              className="flex-1 sm:flex-initial h-11 px-4 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 active:scale-95 transition-all border border-indigo-100 shadow-sm"
                               disabled={allClassRecords.length === 0}
                               title="Export Detailed Report"
                            >
-                              <FileDown className="h-5 w-5" />
-                              <span className="text-[10px] font-black tracking-widest uppercase">Download Reports</span>
+                              <FileDown className="h-4 w-4" />
+                              <span>Export Report</span>
                            </button>
+
+                           <button
+                              onClick={handleShareAttendance}
+                              className="flex-1 sm:flex-initial h-11 px-4 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 active:scale-95 transition-all border border-emerald-100 shadow-sm"
+                              disabled={allClassRecords.length === 0}
+                              title="Share Attendance Summary"
+                           >
+                              <Share2 className="h-4 w-4" />
+                              <span>{historyFilterDate ? 'Share Day' : "Share Today"}</span>
+                           </button>
+
+                           {historyFilterDate && (
+                              <button
+                                 onClick={() => {
+                                    const dayRecs = allClassRecords.filter(r => r.date === historyFilterDate && r.subjectId === selSubjectId);
+                                    const daySlots = Array.from(new Set(dayRecs.map(r => r.lectureSlot))).filter(Boolean).sort() as number[];
+                                    setSlotsToDeleteInModal(daySlots);
+                                    setShowDeleteModal(true);
+                                 }}
+                                 className="h-11 px-3 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-xl flex items-center justify-center gap-1.5 active:scale-95 transition-all border border-rose-100 shadow-sm"
+                                 title="Delete this date's records"
+                              >
+                                 <Trash className="h-4 w-4" />
+                                 <span className="text-xs font-black hidden sm:inline">Delete</span>
+                              </button>
+                           )}
+                        </div>
+                     </div>
+
+                     {/* Date Selection Bar */}
+                     <div className="pt-2 border-t border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-3">
+                        <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none pb-1">
+                           <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest mr-1 shrink-0">
+                              View:
+                           </span>
+                           <button
+                              onClick={() => { setHistoryFilterDate(''); setHistoryTillDate(''); setHistoryQuickFilter('ALL'); }}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold shrink-0 transition-all ${
+                                 !historyFilterDate
+                                    ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-200'
+                                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                              }`}
+                           >
+                              All Classes (Overall)
+                           </button>
+                           <button
+                              onClick={() => {
+                                 const today = new Date().toISOString().split('T')[0];
+                                 setHistoryFilterDate(today);
+                                 setHistoryTillDate('');
+                                 setHistoryQuickFilter('ALL');
+                              }}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold shrink-0 transition-all ${
+                                 historyFilterDate === new Date().toISOString().split('T')[0]
+                                    ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-200'
+                                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                              }`}
+                           >
+                              Today
+                           </button>
+                           <button
+                              onClick={() => {
+                                 const yest = new Date();
+                                 yest.setDate(yest.getDate() - 1);
+                                 setHistoryFilterDate(yest.toISOString().split('T')[0]);
+                                 setHistoryTillDate('');
+                                 setHistoryQuickFilter('ALL');
+                              }}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold shrink-0 transition-all ${
+                                 (() => {
+                                    const yest = new Date();
+                                    yest.setDate(yest.getDate() - 1);
+                                    return historyFilterDate === yest.toISOString().split('T')[0];
+                                 })()
+                                    ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-200'
+                                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                              }`}
+                           >
+                              Yesterday
+                           </button>
+
+                           {/* Custom Date Picker */}
+                           <div className="relative flex items-center shrink-0">
+                              <input
+                                 type="date"
+                                 value={historyFilterDate}
+                                 onChange={e => { setHistoryFilterDate(e.target.value); setHistoryTillDate(''); setHistoryQuickFilter('ALL'); }}
+                                 className="pl-7 pr-2 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-indigo-500 transition-all cursor-pointer"
+                                 title="Pick any specific date"
+                              />
+                              <Calendar className="h-3.5 w-3.5 text-slate-500 absolute left-2 pointer-events-none" />
+                              {historyFilterDate && (
+                                 <button
+                                    onClick={() => { setHistoryFilterDate(''); setHistoryQuickFilter('ALL'); }}
+                                    className="ml-1 p-1 text-slate-400 hover:text-slate-600"
+                                    title="Clear date"
+                                 >
+                                    <XCircle className="h-3.5 w-3.5" />
+                                 </button>
+                              )}
+                           </div>
                         </div>
 
+                        {/* Advanced Filters Button */}
                         <button
-                           onClick={handleShareAttendance}
-                           className="w-full h-12 bg-emerald-50 text-emerald-700 rounded-2xl flex items-center justify-center gap-3 active:scale-95 transition-all border border-emerald-100"
-                           disabled={allClassRecords.length === 0}
+                           onClick={() => setShowFilters(!showFilters)}
+                           className={`px-3 py-1.5 self-start md:self-auto rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all ${
+                              showFilters || historyStartDate || historyTillDate || attendanceFilter === 'CUSTOM'
+                                 ? 'bg-indigo-100 text-indigo-700'
+                                 : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                           }`}
                         >
-                           <Share2 className="h-5 w-5" />
-                           <span className="text-[10px] font-black tracking-widest uppercase">
-                              {historyFilterDate 
-                                 ? `Share ${new Date(historyFilterDate).toLocaleDateString('en-IN', {day: '2-digit', month: '2-digit', year: '2-digit'})} Attendance` 
-                                 : "Share Today's Attendance"}
-                           </span>
+                           <Filter className="h-3.5 w-3.5" />
+                           <span>Advanced Filters</span>
+                           {(historyStartDate || historyTillDate || attendanceFilter === 'CUSTOM') && (
+                              <span className="w-2 h-2 rounded-full bg-indigo-600"></span>
+                           )}
                         </button>
+                     </div>
 
-                        {showFilters && (
-                           <div className="bg-slate-50 p-4 rounded-2xl space-y-4 animate-in slide-in-from-top-2 duration-300">
-                              <div className="grid grid-cols-2 gap-3">
-                                 <div className="space-y-1">
-                                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest pl-1">From</label>
-                                    <input type="date" value={historyStartDate} onChange={e => setHistoryStartDate(e.target.value)} className="w-full p-2.5 bg-white border border-slate-100 rounded-xl text-xs font-bold focus:ring-2 focus:ring-indigo-500 outline-none transition-all" />
-                                 </div>
-                                 <div className="space-y-1">
-                                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest pl-1">To</label>
-                                    <input type="date" value={historyTillDate} onChange={e => setHistoryTillDate(e.target.value)} className="w-full p-2.5 bg-white border border-slate-100 rounded-xl text-xs font-bold focus:ring-2 focus:ring-indigo-500 outline-none transition-all" />
-                                 </div>
-                              </div>
-
+                     {/* Advanced Filters Panel */}
+                     {showFilters && (
+                        <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-4 animate-in slide-in-from-top-2 duration-300">
+                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                               <div className="space-y-1">
-                                 <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest pl-1">Score Range</label>
-                                 <div className="flex gap-2">
-                                    <select
-                                       value={attendanceOperator}
-                                       onChange={e => setAttendanceOperator(e.target.value as any)}
-                                       className="w-16 p-2.5 bg-white border border-slate-100 rounded-xl text-xs font-black text-indigo-600 focus:ring-2 focus:ring-indigo-500 outline-none"
-                                    >
-                                       <option value="GE">≥</option>
-                                       <option value="LE">≤</option>
-                                       <option value="GT">&gt;</option>
-                                       <option value="LT">&lt;</option>
-                                    </select>
-                                    <input
-                                       type="number"
-                                       value={attendanceThreshold}
-                                       onChange={e => setAttendanceThreshold(Number(e.target.value))}
-                                       className="flex-1 p-2.5 bg-white border border-slate-100 rounded-xl text-xs font-black focus:ring-2 focus:ring-indigo-500 outline-none"
-                                       placeholder="Threshold %"
-                                    />
-                                 </div>
+                                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">From Date</label>
+                                 <input
+                                    type="date"
+                                    value={historyStartDate}
+                                    onChange={e => setHistoryStartDate(e.target.value)}
+                                    className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500 outline-none"
+                                 />
                               </div>
-
-                              <div className="pt-2 flex gap-2">
-                                 <button
-                                    onClick={() => { setHistoryStartDate(''); setHistoryTillDate(''); setAttendanceFilter('ALL'); setAttendanceThreshold(75); setShowFilters(false); }}
-                                    className="flex-1 py-2 bg-white text-slate-500 text-[10px] font-black uppercase tracking-widest rounded-xl hover:bg-rose-50 hover:text-rose-500 transition-all border border-slate-100"
-                                 >
-                                    Reset All
-                                 </button>
-                                 <button
-                                    onClick={() => { setAttendanceFilter('CUSTOM'); setShowFilters(false); }}
-                                    className="flex-[2] py-2 bg-indigo-600 text-white text-[10px] font-black uppercase tracking-widest rounded-xl shadow-lg shadow-indigo-100 transition-all"
-                                 >
-                                    Apply Filter
-                                 </button>
+                              <div className="space-y-1">
+                                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">To Date</label>
+                                 <input
+                                    type="date"
+                                    value={historyTillDate}
+                                    onChange={e => setHistoryTillDate(e.target.value)}
+                                    className="w-full p-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500 outline-none"
+                                 />
                               </div>
                            </div>
+
+                           <div className="space-y-1">
+                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">Custom Attendance % Filter</label>
+                              <div className="flex items-center gap-2">
+                                 <select
+                                    value={attendanceOperator}
+                                    onChange={e => setAttendanceOperator(e.target.value as any)}
+                                    className="p-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none"
+                                 >
+                                    <option value="LT">Below (&lt;)</option>
+                                    <option value="LE">At or Below (≤)</option>
+                                    <option value="GE">At or Above (≥)</option>
+                                    <option value="GT">Above (&gt;)</option>
+                                 </select>
+                                 <input
+                                    type="number"
+                                    min="0"
+                                    max="100"
+                                    value={attendanceThreshold}
+                                    onChange={e => setAttendanceThreshold(Number(e.target.value))}
+                                    className="w-24 p-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-900 outline-none"
+                                    placeholder="75"
+                                 />
+                                 <span className="text-xs font-bold text-slate-500">% Attendance</span>
+                              </div>
+                           </div>
+
+                           <div className="flex justify-end gap-2 pt-1">
+                              <button
+                                 onClick={() => {
+                                    setHistoryStartDate('');
+                                    setHistoryTillDate('');
+                                    setAttendanceFilter('ALL');
+                                    setAttendanceThreshold(75);
+                                    setShowFilters(false);
+                                 }}
+                                 className="px-4 py-2 bg-white hover:bg-rose-50 text-slate-600 hover:text-rose-600 rounded-xl text-xs font-bold border border-slate-200 transition-all"
+                              >
+                                 Reset
+                              </button>
+                              <button
+                                 onClick={() => {
+                                    setAttendanceFilter('CUSTOM');
+                                    setShowFilters(false);
+                                 }}
+                                 className="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold shadow-md shadow-indigo-100 transition-all"
+                              >
+                                 Apply Filter
+                              </button>
+                           </div>
+                        </div>
+                     )}
+                  </div>
+
+                  {/* 2. Interactive Search & Friendly Filter Pills */}
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                     {/* Search Box */}
+                     <div className="relative flex-1">
+                        <Search className="h-4 w-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <input
+                           type="text"
+                           value={historySearchQuery}
+                           onChange={e => setHistorySearchQuery(e.target.value)}
+                           placeholder="Search by student name, roll no, enrollment..."
+                           className="w-full pl-10 pr-9 py-2.5 bg-white border border-slate-200 rounded-2xl text-xs font-bold text-slate-900 placeholder:text-slate-400 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none shadow-sm transition-all"
+                        />
+                        {historySearchQuery && (
+                           <button
+                              onClick={() => setHistorySearchQuery('')}
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                           >
+                              <XCircle className="h-4 w-4" />
+                           </button>
+                        )}
+                     </div>
+
+                     {/* Filter Pills */}
+                     <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none pb-1">
+                        {!historyFilterDate ? (
+                           <>
+                              <button
+                                 onClick={() => setHistoryQuickFilter('ALL')}
+                                 className={`px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+                                    historyQuickFilter === 'ALL'
+                                       ? 'bg-slate-900 text-white shadow-sm'
+                                       : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                                 }`}
+                              >
+                                 All ({historyProcessedData.summaryStats.totalEnrolled})
+                              </button>
+                              <button
+                                 onClick={() => setHistoryQuickFilter('LOW')}
+                                 className={`px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap flex items-center gap-1.5 transition-all ${
+                                    historyQuickFilter === 'LOW'
+                                       ? 'bg-rose-600 text-white shadow-sm'
+                                       : 'bg-white text-rose-600 hover:bg-rose-50 border border-rose-200'
+                                 }`}
+                              >
+                                 <AlertTriangle className="h-3.5 w-3.5" />
+                                 <span>Below 75% ({historyProcessedData.summaryStats.defaulterCount})</span>
+                              </button>
+                              <button
+                                 onClick={() => setHistoryQuickFilter('GOOD')}
+                                 className={`px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap flex items-center gap-1.5 transition-all ${
+                                    historyQuickFilter === 'GOOD'
+                                       ? 'bg-emerald-600 text-white shadow-sm'
+                                       : 'bg-white text-emerald-600 hover:bg-emerald-50 border border-emerald-200'
+                                 }`}
+                              >
+                                 <UserCheck className="h-3.5 w-3.5" />
+                                 <span>Safe 75%+ ({historyProcessedData.summaryStats.goodCount})</span>
+                              </button>
+                           </>
+                        ) : (
+                           <>
+                              <button
+                                 onClick={() => setHistoryQuickFilter('ALL')}
+                                 className={`px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+                                    historyQuickFilter === 'ALL'
+                                       ? 'bg-slate-900 text-white shadow-sm'
+                                       : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                                 }`}
+                              >
+                                 All ({historyProcessedData.summaryStats.totalEnrolled})
+                              </button>
+                              <button
+                                 onClick={() => setHistoryQuickFilter('PRESENT')}
+                                 className={`px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap flex items-center gap-1.5 transition-all ${
+                                    historyQuickFilter === 'PRESENT'
+                                       ? 'bg-emerald-600 text-white shadow-sm'
+                                       : 'bg-white text-emerald-600 hover:bg-emerald-50 border border-emerald-200'
+                                 }`}
+                              >
+                                 <UserCheck className="h-3.5 w-3.5" />
+                                 <span>Present ({historyProcessedData.summaryStats.datePresentCount})</span>
+                              </button>
+                              <button
+                                 onClick={() => setHistoryQuickFilter('ABSENT')}
+                                 className={`px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap flex items-center gap-1.5 transition-all ${
+                                    historyQuickFilter === 'ABSENT'
+                                       ? 'bg-rose-600 text-white shadow-sm'
+                                       : 'bg-white text-rose-600 hover:bg-rose-50 border border-rose-200'
+                                 }`}
+                              >
+                                 <UserX className="h-3.5 w-3.5" />
+                                 <span>Absent ({historyProcessedData.summaryStats.dateAbsentCount})</span>
+                              </button>
+                           </>
                         )}
                      </div>
                   </div>
 
-                  <div className="md:hidden space-y-3 pb-20">
+                  {/* 3. Mobile Card View (Optimized for Small Screens) */}
+                  <div className="md:hidden space-y-3">
                      {(() => {
-                        const { batchGroupMap, studentStats } = historyProcessedData;
+                        const { batchGroupMap, studentStats, filteredStudents } = historyProcessedData;
                         const nodes: React.ReactNode[] = [];
+
+                        if (filteredStudents.length === 0) {
+                           return (
+                              <div className="bg-white p-8 rounded-3xl border border-slate-100 text-center space-y-3 shadow-sm">
+                                 <Users className="h-10 w-10 text-slate-300 mx-auto" />
+                                 <h4 className="text-sm font-black text-slate-700">No students found</h4>
+                                 <p className="text-xs text-slate-400">
+                                    {historySearchQuery 
+                                       ? `No student matches "${historySearchQuery}"` 
+                                       : 'Try resetting your filter.'}
+                                 </p>
+                                 {(historySearchQuery || historyQuickFilter !== 'ALL') && (
+                                    <button
+                                       onClick={() => { setHistorySearchQuery(''); setHistoryQuickFilter('ALL'); }}
+                                       className="px-4 py-2 bg-indigo-50 text-indigo-700 text-xs font-bold rounded-xl"
+                                    >
+                                       Reset Filters
+                                    </button>
+                                 )}
+                              </div>
+                           );
+                        }
 
                         batchGroupMap.forEach((batchStudents, batchId) => {
                            const batchName = metaData.batches[batchId] || batchId;
                            nodes.push(
-                              <div key={`mb_banner_${batchId}`} className="flex items-center gap-2 px-3 py-2 bg-indigo-600 rounded-2xl">
-                                 <div className="h-1.5 w-1.5 rounded-full bg-indigo-200" />
-                                 <span className="text-[10px] font-black text-white uppercase tracking-[0.2em] flex-1">{batchName}</span>
-                                 <span className="text-[10px] font-bold text-indigo-200">{batchStudents.length} students</span>
+                              <div key={`mb_banner_${batchId}`} className="flex items-center gap-2 px-3.5 py-2 bg-slate-900 rounded-2xl shadow-sm">
+                                 <div className="h-2 w-2 rounded-full bg-indigo-400" />
+                                 <span className="text-[11px] font-black text-white uppercase tracking-wider flex-1">
+                                    Section / Batch: {batchName}
+                                 </span>
+                                 <span className="text-[10px] font-bold text-slate-400">{batchStudents.length} students</span>
                               </div>
                            );
+
                            batchStudents.forEach(s => {
                               const stats = studentStats.get(s.uid)!;
+
                               if (historyFilterDate) {
                                  const dateRecs = stats.dateRecs;
                                  nodes.push(
-                                    <div key={s.uid} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between">
-                                       <div className="flex-1 min-w-0 mr-4">
-                                          <div className="flex items-center gap-2 mb-1">
-                                             <span className="text-[10px] font-black text-slate-400 uppercase tracking-tighter opacity-70">#{s.studentData?.rollNo}</span>
-                                             <div className="h-1 w-1 bg-slate-200 rounded-full"></div>
-                                             <span className="text-[10px] font-bold text-slate-900 font-mono tracking-tighter opacity-100 truncate">{s.studentData?.enrollmentId}</span>
+                                    <div
+                                       key={s.uid}
+                                       onClick={() => setViewHistoryStudent(s)}
+                                       className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm active:scale-[0.98] transition-all cursor-pointer hover:border-indigo-100 flex items-center justify-between gap-3"
+                                    >
+                                       <div className="flex-1 min-w-0">
+                                          <div className="flex items-center gap-1.5 mb-1">
+                                             <span className="text-[10px] font-black text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded-md">
+                                                #{s.studentData?.rollNo || '-'}
+                                             </span>
+                                             <span className="text-[10px] font-mono font-bold text-slate-500 truncate">
+                                                {s.studentData?.enrollmentId}
+                                             </span>
                                           </div>
-                                          <h4 className="font-bold text-slate-800 text-sm tracking-tight leading-none">{s.displayName}</h4>
-                                       </div>
-                                       <div className="flex gap-1.5 flex-wrap justify-end max-w-[120px]">
-                                          {dateRecs.length > 0 ? dateRecs.map(r => (
-                                             <div key={r.id} className={`px-2 py-1 rounded-lg text-[9px] font-black border ${r.isPresent ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-rose-50 text-rose-600 border-rose-100'}`}>
-                                                L{r.lectureSlot || 1}: {r.isPresent ? 'P' : 'A'}
+                                          <h4 className="font-bold text-slate-900 text-sm tracking-tight leading-snug truncate">
+                                             {s.displayName}
+                                          </h4>
+                                          {dateRecs.length > 0 && (
+                                             <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                                                {dateRecs.map(r => (
+                                                   <span
+                                                      key={r.id}
+                                                      className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase ${
+                                                         r.isPresent 
+                                                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' 
+                                                            : 'bg-rose-50 text-rose-700 border border-rose-100'
+                                                      }`}
+                                                   >
+                                                      Slot {r.lectureSlot || 1}: {r.isPresent ? 'P' : 'A'}
+                                                   </span>
+                                                ))}
                                              </div>
-                                          )) : <span className="text-[10px] text-slate-300 italic font-bold">No Data</span>}
+                                          )}
+                                       </div>
+
+                                       <div className="flex items-center gap-2 shrink-0">
+                                          {stats.isDatePresent ? (
+                                             <span className="px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-100 font-black text-xs flex items-center gap-1">
+                                                <Check className="h-3.5 w-3.5" /> Present
+                                             </span>
+                                          ) : stats.isDateAbsent ? (
+                                             <span className="px-3 py-1.5 rounded-xl bg-rose-50 text-rose-700 border border-rose-100 font-black text-xs flex items-center gap-1">
+                                                <X className="h-3.5 w-3.5" /> Absent
+                                             </span>
+                                          ) : (
+                                             <span className="px-3 py-1.5 rounded-xl bg-slate-100 text-slate-500 font-bold text-xs">
+                                                Not Marked
+                                             </span>
+                                          )}
+                                          <ChevronRight className="h-4 w-4 text-slate-300" />
                                        </div>
                                     </div>
                                  );
                               } else {
-                                 const pct = stats.pct;
+                                 const { total, present, pct, neededFor75 } = stats;
                                  nodes.push(
-                                    <div key={s.uid} onClick={() => setViewHistoryStudent(s)} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex items-center justify-between active:scale-[0.98] transition-all group">
-                                       <div className="flex-1 min-w-0 mr-4">
-                                          <div className="flex items-center gap-2 mb-1">
-                                             <span className="text-[10px] font-black text-slate-400 uppercase tracking-tighter opacity-70">#{s.studentData?.rollNo}</span>
-                                             <div className="h-1 w-1 bg-slate-200 rounded-full"></div>
-                                             <span className="text-[10px] font-bold text-slate-900 font-mono tracking-tighter opacity-100 truncate">{s.studentData?.enrollmentId}</span>
-                                          </div>
-                                          <h4 className="font-bold text-slate-800 text-sm tracking-tight leading-none mb-1.5 group-hover:text-indigo-600 transition-colors uppercase selectable">{s.displayName}</h4>
-                                          <div className="flex items-center gap-4">
-                                             <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                                                <div className={`h-full rounded-full transition-all duration-1000 ${pct < 75 ? 'bg-rose-500' : 'bg-emerald-500'}`} style={{ width: `${pct}%` }}></div>
+                                    <div
+                                       key={s.uid}
+                                       onClick={() => setViewHistoryStudent(s)}
+                                       className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm active:scale-[0.98] transition-all cursor-pointer hover:border-indigo-100"
+                                    >
+                                       <div className="flex items-center justify-between gap-3 mb-2">
+                                          <div className="min-w-0">
+                                             <div className="flex items-center gap-1.5 mb-1">
+                                                <span className="text-[10px] font-black text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded-md">
+                                                   #{s.studentData?.rollNo || '-'}
+                                                </span>
+                                                <span className="text-[10px] font-mono font-bold text-slate-500 truncate">
+                                                   {s.studentData?.enrollmentId}
+                                                </span>
                                              </div>
-                                             <span className={`text-[10px] font-black leading-none ${pct < 75 ? 'text-rose-600' : 'text-emerald-600'}`}>{pct}%</span>
+                                             <h4 className="font-bold text-slate-900 text-sm tracking-tight leading-snug truncate">
+                                                {s.displayName}
+                                             </h4>
+                                          </div>
+
+                                          <div className="text-right shrink-0">
+                                             <div className={`text-base font-black leading-tight ${pct < 75 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                                                {pct}%
+                                             </div>
+                                             <div className="text-[10px] font-bold text-slate-400">
+                                                {present} / {total} Classes
+                                             </div>
                                           </div>
                                        </div>
-                                       <div className="h-10 w-10 flex items-center justify-center bg-slate-50 text-slate-300 rounded-xl group-hover:bg-indigo-50 group-hover:text-indigo-400 transition-all">
-                                          <ChevronDown className="h-4 w-4 transform -rotate-90" />
+
+                                       <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden mb-2">
+                                          <div
+                                             className={`h-full rounded-full transition-all duration-700 ${
+                                                pct < 75 ? 'bg-rose-500' : pct < 85 ? 'bg-amber-500' : 'bg-emerald-500'
+                                             }`}
+                                             style={{ width: `${Math.min(100, pct)}%` }}
+                                          />
+                                       </div>
+
+                                       <div className="flex items-center justify-between text-[10px] pt-1">
+                                          {pct < 75 ? (
+                                             <span className="font-bold text-rose-600 flex items-center gap-1">
+                                                <AlertTriangle className="h-3 w-3" /> Shortage: Need +{neededFor75} lectures for 75%
+                                             </span>
+                                          ) : (
+                                             <span className="font-bold text-emerald-600 flex items-center gap-1">
+                                                <Check className="h-3 w-3" /> Safe
+                                             </span>
+                                          )}
+                                          <span className="font-bold text-slate-400 flex items-center gap-0.5 group-hover:text-indigo-600">
+                                             Timeline <ChevronRight className="h-3 w-3 inline" />
+                                          </span>
                                        </div>
                                     </div>
                                  );
                               }
                            });
                         });
+
                         return nodes;
                      })()}
-                     {historyProcessedData.filteredStudents.length === 0 && <div className="py-20 text-center font-black text-slate-300 uppercase tracking-widest text-[10px]">No Records Found</div>}
                   </div>
 
-                  <div className="hidden md:block overflow-x-auto">
-                     <table className="w-full text-sm text-left text-slate-900">
-                        <thead className="bg-slate-50 border-b">
-                           <tr>
-                              <th className="p-3 text-slate-900 font-bold uppercase text-[10px] tracking-widest leading-none">S.No</th>
-                              <th className="p-3 text-slate-900 font-bold uppercase text-[10px] tracking-widest leading-none">Name</th>
-                              <th className="p-3 text-slate-900 font-bold uppercase text-[10px] tracking-widest leading-none">Enrollment</th>
-                              {historyFilterDate ? (
-                                 <>
-                                    <th className="p-3 text-slate-900 font-bold text-center uppercase text-[10px] tracking-widest leading-none">Batch</th>
-                                    <th className="p-3 text-slate-900 font-bold text-center uppercase text-[10px] tracking-widest leading-none">Date Status ({historyFilterDate})</th>
-                                 </>
-                              ) : (
-                                 <>
-                                    <th className="p-3 text-slate-900 font-bold text-center uppercase text-[10px] tracking-widest leading-none">Sessions</th>
-                                    <th className="p-3 text-slate-900 font-bold text-center uppercase text-[10px] tracking-widest leading-none">Present</th>
-                                    <th className="p-3 text-slate-900 font-bold text-center uppercase text-[10px] tracking-widest leading-none">% Score</th>
-                                    <th className="p-3 text-slate-900 font-bold text-right uppercase text-[10px] tracking-widest leading-none">Action</th>
-                                 </>
-                              )}
-                           </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-50">
-                           {(() => {
-                              const { batchGroupMap, studentStats } = historyProcessedData;
-                              const rows: React.ReactNode[] = [];
-                              const colSpan = historyFilterDate ? 5 : 7;
-                              batchGroupMap.forEach((batchStudents, batchId) => {
-                                 const batchName = metaData.batches[batchId] || batchId;
-                                 rows.push(
-                                    <tr key={`dt_banner_${batchId}`}>
-                                       <td colSpan={colSpan} className="px-3 py-2 bg-indigo-600">
-                                          <div className="flex items-center gap-2">
-                                             <div className="h-1.5 w-1.5 rounded-full bg-indigo-200" />
-                                             <span className="text-[10px] font-black text-white uppercase tracking-[0.2em] flex-1">Batch: {batchName}</span>
-                                             <span className="text-[10px] font-bold text-indigo-200">{batchStudents.length} students</span>
-                                          </div>
-                                       </td>
-                                    </tr>
-                                 );
-                                 batchStudents.forEach(s => {
-                                    const stats = studentStats.get(s.uid)!;
-                                    if (historyFilterDate) {
-                                       const dateRecs = stats.dateRecs;
-                                       rows.push(
-                                          <tr key={s.uid} className="hover:bg-indigo-50/30 transition-colors">
-                                             <td className="p-3 font-mono text-slate-400 text-xs tracking-tighter">{s.studentData?.rollNo}</td>
-                                             <td className="p-3 font-bold text-slate-700 text-sm tracking-tight uppercase selectable">{s.displayName}</td>
-                                             <td className="p-3 font-mono text-slate-500 text-xs tracking-tighter">{s.studentData?.enrollmentId || '-'}</td>
-                                             <td className="p-3 text-center text-slate-400 font-black text-[10px]">{batchName}</td>
-                                             <td className="p-3">
-                                                {dateRecs.length > 0 ? (
-                                                   <div className="flex gap-2 justify-center flex-wrap">
-                                                      {dateRecs.map(r => (
-                                                         <span key={r.id} className={`inline-flex items-center px-2 py-1 rounded-lg text-[10px] font-black border tracking-wider ${r.isPresent ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-rose-50 text-rose-600 border-rose-100'}`}>
-                                                            L{r.lectureSlot || 1}: {r.isPresent ? 'P' : 'A'}
-                                                         </span>
-                                                      ))}
+                  {/* 4. Desktop Table View */}
+                  <div className="hidden md:block bg-white rounded-3xl border border-slate-100 shadow-xl shadow-slate-100/60 overflow-hidden">
+                     <div className="overflow-x-auto">
+                        <table className="w-full text-sm text-left text-slate-800">
+                           <thead className="bg-slate-50/80 border-b border-slate-100">
+                              <tr>
+                                 <th className="py-3.5 px-4 text-slate-500 font-black uppercase text-[10px] tracking-wider">Roll No</th>
+                                 <th className="py-3.5 px-4 text-slate-500 font-black uppercase text-[10px] tracking-wider">Student Name</th>
+                                 <th className="py-3.5 px-4 text-slate-500 font-black uppercase text-[10px] tracking-wider">Enrollment ID</th>
+                                 <th className="py-3.5 px-4 text-slate-500 font-black uppercase text-[10px] tracking-wider text-center">Batch</th>
+                                 {historyFilterDate ? (
+                                    <>
+                                       <th className="py-3.5 px-4 text-slate-500 font-black uppercase text-[10px] tracking-wider text-center">Slots Marked</th>
+                                       <th className="py-3.5 px-4 text-slate-500 font-black uppercase text-[10px] tracking-wider text-center">Status</th>
+                                       <th className="py-3.5 px-4 text-slate-500 font-black uppercase text-[10px] tracking-wider text-right">Details</th>
+                                    </>
+                                 ) : (
+                                    <>
+                                       <th className="py-3.5 px-4 text-slate-500 font-black uppercase text-[10px] tracking-wider text-center">Classes Attended</th>
+                                       <th className="py-3.5 px-4 text-slate-500 font-black uppercase text-[10px] tracking-wider text-center">Score %</th>
+                                       <th className="py-3.5 px-4 text-slate-500 font-black uppercase text-[10px] tracking-wider text-center">Status</th>
+                                       <th className="py-3.5 px-4 text-slate-500 font-black uppercase text-[10px] tracking-wider text-right">Action</th>
+                                    </>
+                                 )}
+                              </tr>
+                           </thead>
+                           <tbody className="divide-y divide-slate-100">
+                              {(() => {
+                                 const { batchGroupMap, studentStats, filteredStudents } = historyProcessedData;
+                                 const rows: React.ReactNode[] = [];
+                                 const colSpan = historyFilterDate ? 7 : 8;
+
+                                 if (filteredStudents.length === 0) {
+                                    return (
+                                       <tr>
+                                          <td colSpan={colSpan} className="py-16 text-center text-slate-400">
+                                             <Users className="h-10 w-10 mx-auto text-slate-200 mb-2" />
+                                             <p className="font-black text-xs uppercase tracking-widest text-slate-400">No student records match filters</p>
+                                          </td>
+                                       </tr>
+                                    );
+                                 }
+
+                                 batchGroupMap.forEach((batchStudents, batchId) => {
+                                    const batchName = metaData.batches[batchId] || batchId;
+                                    rows.push(
+                                       <tr key={`dt_banner_${batchId}`}>
+                                          <td colSpan={colSpan} className="px-4 py-2.5 bg-slate-900">
+                                             <div className="flex items-center gap-2">
+                                                <div className="h-2 w-2 rounded-full bg-indigo-400" />
+                                                <span className="text-xs font-black text-white uppercase tracking-wider flex-1">
+                                                   Batch / Section: {batchName}
+                                                </span>
+                                                <span className="text-[10px] font-bold text-slate-400">
+                                                   {batchStudents.length} Students
+                                                </span>
+                                             </div>
+                                          </td>
+                                       </tr>
+                                    );
+
+                                    batchStudents.forEach(s => {
+                                       const stats = studentStats.get(s.uid)!;
+                                       if (historyFilterDate) {
+                                          const dateRecs = stats.dateRecs;
+                                          rows.push(
+                                             <tr
+                                                key={s.uid}
+                                                onClick={() => setViewHistoryStudent(s)}
+                                                className="hover:bg-indigo-50/40 cursor-pointer transition-colors group"
+                                             >
+                                                <td className="py-3 px-4 font-mono font-bold text-slate-600 text-xs">
+                                                   {s.studentData?.rollNo || '-'}
+                                                </td>
+                                                <td className="py-3 px-4 font-bold text-slate-800 text-sm group-hover:text-indigo-600 transition-colors">
+                                                   {s.displayName}
+                                                </td>
+                                                <td className="py-3 px-4 font-mono font-medium text-slate-500 text-xs">
+                                                   {s.studentData?.enrollmentId || '-'}
+                                                </td>
+                                                <td className="py-3 px-4 text-center font-bold text-xs text-slate-500">
+                                                   {batchName}
+                                                </td>
+                                                <td className="py-3 px-4 text-center">
+                                                   {dateRecs.length > 0 ? (
+                                                      <div className="flex gap-1.5 justify-center flex-wrap">
+                                                         {dateRecs.map(r => (
+                                                            <span
+                                                               key={r.id}
+                                                               className={`px-2 py-0.5 rounded-md text-[10px] font-black border ${
+                                                                  r.isPresent 
+                                                                     ? 'bg-emerald-50 text-emerald-700 border-emerald-100' 
+                                                                     : 'bg-rose-50 text-rose-700 border-rose-100'
+                                                               }`}
+                                                            >
+                                                               Slot {r.lectureSlot || 1}: {r.isPresent ? 'P' : 'A'}
+                                                            </span>
+                                                         ))}
+                                                      </div>
+                                                   ) : (
+                                                      <span className="text-slate-300 italic text-xs">Not Marked</span>
+                                                   )}
+                                                </td>
+                                                <td className="py-3 px-4 text-center">
+                                                   {stats.isDatePresent ? (
+                                                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-black bg-emerald-50 text-emerald-700 border border-emerald-100">
+                                                         <Check className="h-3 w-3" /> Present
+                                                      </span>
+                                                   ) : stats.isDateAbsent ? (
+                                                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-black bg-rose-50 text-rose-700 border border-rose-100">
+                                                         <X className="h-3 w-3" /> Absent
+                                                      </span>
+                                                   ) : (
+                                                      <span className="text-slate-400 text-xs">-</span>
+                                                   )}
+                                                </td>
+                                                <td className="py-3 px-4 text-right">
+                                                   <span className="text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center justify-end gap-1">
+                                                      View <ChevronRight className="h-3.5 w-3.5" />
+                                                   </span>
+                                                </td>
+                                             </tr>
+                                          );
+                                       } else {
+                                          const { total, present, pct, neededFor75 } = stats;
+                                          rows.push(
+                                             <tr
+                                                key={s.uid}
+                                                onClick={() => setViewHistoryStudent(s)}
+                                                className="hover:bg-indigo-50/40 cursor-pointer transition-colors group"
+                                             >
+                                                <td className="py-3 px-4 font-mono font-bold text-slate-600 text-xs">
+                                                   {s.studentData?.rollNo || '-'}
+                                                </td>
+                                                <td className="py-3 px-4 font-bold text-slate-800 text-sm group-hover:text-indigo-600 transition-colors">
+                                                   {s.displayName}
+                                                </td>
+                                                <td className="py-3 px-4 font-mono font-medium text-slate-500 text-xs">
+                                                   {s.studentData?.enrollmentId || '-'}
+                                                </td>
+                                                <td className="py-3 px-4 text-center font-bold text-xs text-slate-500">
+                                                   {batchName}
+                                                </td>
+                                                <td className="py-3 px-4 text-center font-bold text-xs text-slate-700">
+                                                   {present} <span className="text-slate-400 font-normal">/ {total}</span>
+                                                </td>
+                                                <td className="py-3 px-4 text-center">
+                                                   <div className="flex items-center justify-center gap-2">
+                                                      <div className="w-16 h-2 bg-slate-100 rounded-full overflow-hidden">
+                                                         <div
+                                                            className={`h-full rounded-full ${pct < 75 ? 'bg-rose-500' : 'bg-emerald-500'}`}
+                                                            style={{ width: `${Math.min(100, pct)}%` }}
+                                                         />
+                                                      </div>
+                                                      <span className={`font-black text-xs ${pct < 75 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                                                         {pct}%
+                                                      </span>
                                                    </div>
-                                                ) : <span className="text-slate-200 italic font-black text-[10px] tracking-widest uppercase">No Data</span>}
-                                             </td>
-                                          </tr>
-                                       );
-                                    } else {
-                                       const { total, present, pct } = stats;
-                                       rows.push(
-                                          <tr key={s.uid} onClick={() => setViewHistoryStudent(s)} className="hover:bg-indigo-50/50 cursor-pointer transition-colors group">
-                                             <td className="p-3 font-mono text-slate-400 text-xs tracking-tighter">{s.studentData?.rollNo}</td>
-                                             <td className="p-3 font-bold text-slate-700 text-sm tracking-tight uppercase group-hover:text-indigo-600 transition-colors selectable">{s.displayName}</td>
-                                             <td className="p-3 font-mono text-slate-500 text-xs tracking-tighter">{s.studentData?.enrollmentId || '-'}</td>
-                                             <td className="p-3 text-center text-slate-400 font-bold text-xs">{total}</td>
-                                             <td className="p-3 text-center text-emerald-600 font-bold text-xs">{present}</td>
-                                             <td className="p-3 text-center">
-                                                <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black tracking-wider ${pct < 75 ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-600'}`}>{pct}%</span>
-                                             </td>
-                                             <td className="p-3 text-right text-slate-300 group-hover:text-indigo-400 transition-colors">
-                                                <ChevronDown className="h-4 w-4 inline transform -rotate-90" />
-                                             </td>
-                                          </tr>
-                                       );
-                                    }
+                                                </td>
+                                                <td className="py-3 px-4 text-center">
+                                                   {pct < 75 ? (
+                                                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-black bg-rose-50 text-rose-700 border border-rose-100">
+                                                         <AlertTriangle className="h-3 w-3" /> Shortage (+{neededFor75})
+                                                      </span>
+                                                   ) : (
+                                                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-black bg-emerald-50 text-emerald-700 border border-emerald-100">
+                                                         <Check className="h-3 w-3" /> Safe
+                                                      </span>
+                                                   )}
+                                                </td>
+                                                <td className="py-3 px-4 text-right">
+                                                   <span className="text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center justify-end gap-1">
+                                                      Timeline <ChevronRight className="h-3.5 w-3.5" />
+                                                   </span>
+                                                </td>
+                                             </tr>
+                                          );
+                                       }
+                                    });
                                  });
-                              });
-                              return rows;
-                           })()}
-                        </tbody>
-                     </table>
+                                 return rows;
+                              })()}
+                           </tbody>
+                        </table>
+                     </div>
                   </div>
                </div>
             )
@@ -4421,6 +5123,21 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
                </div>
             </div>
          </Modal>
+
+         {/* Overwrite & Shift Modal */}
+         <OverwriteShiftModal
+            isOpen={!!activeOverwriteNotif}
+            onClose={() => setActiveOverwriteNotif(null)}
+            notification={activeOverwriteNotif}
+            currentUser={user}
+            onSuccess={(msg) => {
+               alert(msg);
+               refreshPendingOverwrites();
+            }}
+            onDenySuccess={() => {
+               refreshPendingOverwrites();
+            }}
+         />
         </div>
    );
 };

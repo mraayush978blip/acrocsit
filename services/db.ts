@@ -65,6 +65,7 @@ interface IDataService {
   saveAttendance: (records: AttendanceRecord[]) => Promise<void>;
   deleteAttendanceRecords: (ids: string[]) => Promise<void>;
   deleteAttendanceForOverwrite: (date: string, branchId: string, slot: number) => Promise<void>;
+  shiftAttendanceSlot: (date: string, branchId: string, fromSlot: number, toSlot: number) => Promise<number>;
 
   // Notifications
   createNotification: (notification: Omit<Notification, 'id'>) => Promise<void>;
@@ -1405,6 +1406,57 @@ class SupabaseService implements IDataService {
     await this.logAudit('DELETE_FOR_OVERWRITE', { date, branchId, slot, count: records?.length || 0 });
   }
 
+  async shiftAttendanceSlot(date: string, branchId: string, fromSlot: number, toSlot: number): Promise<number> {
+    if (fromSlot === toSlot) return 0;
+    // 1. Fetch records in fromSlot
+    const { data: records, error: fetchErr } = await supabase.from('attendance')
+        .select('*')
+        .eq('date', date)
+        .eq('branch_id', branchId)
+        .eq('lecture_slot', fromSlot);
+    if (fetchErr) throw fetchErr;
+    if (!records || records.length === 0) return 0;
+
+    // 2. Prepare shifted records with new lecture_slot and updated canonical IDs
+    const now = Date.now();
+    const shiftedRows = records.map(r => {
+        let newId = `${r.date}_${r.student_id}_L${toSlot}`;
+        if (r.id && r.id.startsWith('extra_')) {
+            newId = `extra_${r.branch_id}_${r.date}_S${toSlot}_${r.student_id}`;
+        }
+        return {
+            ...r,
+            id: newId,
+            lecture_slot: toSlot,
+            timestamp: now
+        };
+    });
+
+    // 3. Upsert shifted records into target slot
+    const { error: upsertErr } = await supabase.from('attendance').upsert(shiftedRows);
+    if (upsertErr) throw upsertErr;
+
+    // 4. Delete old records from fromSlot
+    const oldIds = records.map(r => r.id);
+    const { error: delErr } = await supabase.from('attendance').delete().in('id', oldIds);
+    if (delErr) {
+        await supabase.from('attendance').delete()
+            .eq('date', date)
+            .eq('branch_id', branchId)
+            .eq('lecture_slot', fromSlot);
+    }
+
+    await this.logAudit('SHIFT_ATTENDANCE_SLOT', { 
+        date, 
+        branchId, 
+        fromSlot, 
+        toSlot, 
+        count: records.length 
+    });
+
+    return records.length;
+  }
+
   // --- Notifications ---
   async createNotification(data: Omit<Notification, 'id'>): Promise<void> {
     const id = `notif_${Date.now()}`;
@@ -2192,6 +2244,31 @@ class MockService implements IDataService {
     let all = this.load('ams_attendance', []) as AttendanceRecord[];
     all = all.filter(a => !(a.date === date && a.branchId === branchId && a.lectureSlot === slot));
     this.save('ams_attendance', all);
+  }
+
+  async shiftAttendanceSlot(date: string, branchId: string, fromSlot: number, toSlot: number): Promise<number> {
+    if (fromSlot === toSlot) return 0;
+    let all = this.load('ams_attendance', []) as AttendanceRecord[];
+    let count = 0;
+    const now = Date.now();
+    const updated = all.map(a => {
+      if (a.date === date && a.branchId === branchId && (a.lectureSlot || 1) === fromSlot) {
+        count++;
+        let newId = `${a.date}_${a.studentId}_L${toSlot}`;
+        if (a.id && a.id.startsWith('extra_')) {
+          newId = `extra_${a.branchId}_${a.date}_S${toSlot}_${a.studentId}`;
+        }
+        return {
+          ...a,
+          id: newId,
+          lectureSlot: toSlot,
+          timestamp: now
+        };
+      }
+      return a;
+    });
+    this.save('ams_attendance', updated);
+    return count;
   }
 
   async createNotification(data: any) {
