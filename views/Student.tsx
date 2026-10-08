@@ -33,12 +33,14 @@ export const StudentDashboard: React.FC<StudentProps> = ({ user }) => {
             db.getSubjects()
          ]);
 
-         // Primary: subjects from faculty assignments for this branch+batch
+         // Primary: subjects from faculty assignments for this branch+batch (excluding extra lectures)
          const myClassAssignments = allAssignments.filter(a =>
             a.branchId === branchId &&
-            (a.batchId === batchId || a.batchId === 'ALL')
+            (a.batchId === batchId || a.batchId === 'ALL') &&
+            a.subjectId !== 'sub_extra'
          );
          const mySubjectIds = new Set(myClassAssignments.map(a => a.subjectId));
+         mySubjectIds.delete('sub_extra');
 
          // Fallback: if no assignments found (e.g. new academic year, faculty not yet assigned),
          // derive subjects from the student's own attendance history so the portal still works.
@@ -48,7 +50,11 @@ export const StudentDashboard: React.FC<StudentProps> = ({ user }) => {
                .forEach(r => mySubjectIds.add(r.subjectId));
          }
 
-         setSubjects(allSubs.filter(s => mySubjectIds.has(s.id)).sort((a, b) => a.name.localeCompare(b.name)));
+         setSubjects(
+            allSubs
+               .filter(s => s.id !== 'sub_extra' && s.code !== 'EXTRA' && mySubjectIds.has(s.id))
+               .sort((a, b) => a.name.localeCompare(b.name))
+         );
 
          const facMap: Record<string, string> = {};
          facultyData.forEach(f => { facMap[f.uid] = f.displayName });
@@ -84,12 +90,13 @@ export const StudentDashboard: React.FC<StudentProps> = ({ user }) => {
    };
 
    let overallTot = 0;
-   let overallPres = extraLectures;
+   let regularPres = 0;
    subjects.forEach(s => {
       const c = calc(s.id);
       overallTot += c.tot;
-      overallPres += c.pres;
+      regularPres += c.pres;
    });
+   const overallPres = regularPres + extraLectures;
    const overallPct = overallTot === 0 ? 100 : Math.min(100, Math.round((overallPres / overallTot) * 100));
    const overallIsLow = overallTot > 0 && overallPct < 75;
 
@@ -320,8 +327,26 @@ export const StudentDashboard: React.FC<StudentProps> = ({ user }) => {
                         </div>
                      </div>
                   ) : (
-                     <div className="text-sm text-slate-600 bg-slate-50 p-4 rounded-xl border border-dashed border-slate-200">
-                        <p>This shows your overall consolidated attendance across all subjects, including extra lectures.</p>
+                     <div className="space-y-3">
+                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-xs space-y-2.5">
+                           <div className="flex justify-between items-center text-slate-600 font-medium">
+                              <span>Regular Classes (Theory & Lab):</span>
+                              <span className="font-bold text-slate-800">{regularPres} / {overallTot}</span>
+                           </div>
+                           {extraLectures > 0 && (
+                              <div className="flex justify-between items-center text-emerald-700 font-medium">
+                                 <span>Extra Lectures Attended (Bonus Added):</span>
+                                 <span className="font-bold">+{extraLectures}</span>
+                              </div>
+                           )}
+                           <div className="border-t border-slate-200 pt-2 flex justify-between items-center font-bold text-slate-900 text-sm">
+                              <span>Consolidated Attendance:</span>
+                              <span className="text-indigo-600">{overallPres} / {overallTot} ({overallPct}%)</span>
+                           </div>
+                        </div>
+                        <p className="text-[11px] text-slate-500 italic">
+                           Note: Only theory and lab lectures count toward total classes held. Extra lectures attended are added to your attendance to increase your percentage.
+                        </p>
                      </div>
                   )}
                </div>

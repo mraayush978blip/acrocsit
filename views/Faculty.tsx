@@ -1297,7 +1297,7 @@ const CoordinatorView: React.FC<{ branchId: string; facultyUser: User; metaData:
                            ) : (
                               <div className="space-y-6">
                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    {allSubjects.map(sub => {
+                                    {allSubjects.filter(sub => sub.id !== 'sub_extra' && sub.code !== 'EXTRA').map(sub => {
                                        const relevant = studentAttendance.filter(a => a.subjectId === sub.id);
                                        const total = relevant.length;
                                        const present = relevant.filter(a => a.isPresent).length;

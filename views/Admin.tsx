@@ -330,7 +330,7 @@ const AdminStudentDetail: React.FC<{ student: User; onBack: () => void }> = ({ s
         // Also include subjects that have attendance data (even if assignment was removed)
         const historySubjectIds = new Set(att.map(a => a.subjectId));
 
-        const filteredSubs = allSubs.filter(s => allottedSubjectIds.has(s.id) || historySubjectIds.has(s.id));
+        const filteredSubs = allSubs.filter(s => s.id !== 'sub_extra' && s.code !== 'EXTRA' && (allottedSubjectIds.has(s.id) || historySubjectIds.has(s.id)));
 
         setAttendance(att);
         setSubjects(filteredSubs);
