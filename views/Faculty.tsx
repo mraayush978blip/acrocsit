@@ -2004,6 +2004,7 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
    const [isDeleting, setIsDeleting] = useState(false);
    const [historySearchQuery, setHistorySearchQuery] = useState('');
    const [historyQuickFilter, setHistoryQuickFilter] = useState<'ALL' | 'LOW' | 'GOOD' | 'PRESENT' | 'ABSENT'>('ALL');
+   const [historyBatchFilter, setHistoryBatchFilter] = useState<string>('ALL');
    const [studentTimelineFilter, setStudentTimelineFilter] = useState<'ALL' | 'PRESENT' | 'ABSENT'>('ALL');
 
    // Overwrite Resolution State
@@ -2174,6 +2175,7 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
       setAttendanceStatus({});
       setIsEditMode(false);
       setSaveMessage('');
+      setHistoryBatchFilter('ALL');
    }, [selBranchId, selSubjectId]);
 
    // 4. Initialize Status / Detect Edit Mode
@@ -2263,10 +2265,29 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
       return bids.map(bid => ({ id: bid, name: metaData.batches[bid] || bid }));
    }, [assignments, selBranchId, selSubjectId, metaData.batches, metaData.rawBatches]);
 
+   // All students assigned to this subject in the class (used for History, Reports, and MST Marks)
+   const subjectStudents = useMemo(() => {
+      if (!selBranchId || !selSubjectId) return [];
+
+      const rel = assignments.filter(a => a.branchId === selBranchId && a.subjectId === selSubjectId);
+      // If we have an 'ALL' assignment or no specific batch restrictions (e.g. coordinator view), include all branch students
+      if (rel.length === 0 || rel.some(a => a.batchId === 'ALL')) {
+         return allBranchStudents;
+      }
+
+      const assignedBatches = new Set(rel.map(a => a.batchId));
+      return allBranchStudents.filter(s => !s.studentData?.batchId || assignedBatches.has(s.studentData.batchId));
+   }, [allBranchStudents, assignments, selBranchId, selSubjectId]);
+
    // Derived Students List (Visual)
+   // In History or Marks tabs, show all students enrolled in this subject/class.
+   // In Mark Attendance tab, strictly filter by selectedMarkingBatches (for active lecture slot).
    const visibleStudents = useMemo(() => {
+      if (activeTab === 'HISTORY' || activeTab === 'MARKS') {
+         return subjectStudents;
+      }
       return allBranchStudents.filter(s => s.studentData?.batchId && selectedMarkingBatches.includes(s.studentData.batchId));
-   }, [allBranchStudents, selectedMarkingBatches]);
+   }, [activeTab, subjectStudents, allBranchStudents, selectedMarkingBatches]);
 
    // Memoized History Data Processing for high performance
    const historyProcessedData = useMemo(() => {
@@ -2435,6 +2456,11 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
             if (attendanceOperator === 'LT') return pct < attendanceThreshold;
          }
 
+         // Batch Filter
+         if (historyBatchFilter !== 'ALL' && s.studentData?.batchId !== historyBatchFilter) {
+            return false;
+         }
+
          return true;
       });
 
@@ -2456,6 +2482,7 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
       historyTillDate,
       historySearchQuery,
       historyQuickFilter,
+      historyBatchFilter,
       attendanceFilter,
       attendanceThreshold,
       attendanceOperator,
@@ -4427,21 +4454,40 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
                            </div>
                         </div>
 
-                        {/* Advanced Filters Button */}
-                        <button
-                           onClick={() => setShowFilters(!showFilters)}
-                           className={`px-3 py-1.5 self-start md:self-auto rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all ${
-                              showFilters || historyStartDate || historyTillDate || attendanceFilter === 'CUSTOM'
-                                 ? 'bg-indigo-100 text-indigo-700'
-                                 : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                           }`}
-                        >
-                           <Filter className="h-3.5 w-3.5" />
-                           <span>Advanced Filters</span>
-                           {(historyStartDate || historyTillDate || attendanceFilter === 'CUSTOM') && (
-                              <span className="w-2 h-2 rounded-full bg-indigo-600"></span>
+                        {/* Right controls: Batch filter (if multiple batches) & Advanced Filters */}
+                        <div className="flex items-center gap-2 self-start md:self-auto">
+                           {sameSubjectBatches.length > 1 && (
+                              <div className="flex items-center gap-1.5 shrink-0 bg-slate-100 px-2.5 py-1.5 rounded-xl border border-slate-200/60">
+                                 <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest hidden sm:inline">Batch:</span>
+                                 <select
+                                    value={historyBatchFilter}
+                                    onChange={e => setHistoryBatchFilter(e.target.value)}
+                                    className="bg-transparent text-xs font-bold text-slate-700 outline-none cursor-pointer"
+                                    title="Filter by Batch"
+                                 >
+                                    <option value="ALL">All Batches</option>
+                                    {sameSubjectBatches.map(b => (
+                                       <option key={b.id} value={b.id}>{b.name}</option>
+                                    ))}
+                                 </select>
+                              </div>
                            )}
-                        </button>
+
+                           <button
+                              onClick={() => setShowFilters(!showFilters)}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all ${
+                                 showFilters || historyStartDate || historyTillDate || attendanceFilter === 'CUSTOM'
+                                    ? 'bg-indigo-100 text-indigo-700'
+                                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                              }`}
+                           >
+                              <Filter className="h-3.5 w-3.5" />
+                              <span>Advanced Filters</span>
+                              {(historyStartDate || historyTillDate || attendanceFilter === 'CUSTOM') && (
+                                 <span className="w-2 h-2 rounded-full bg-indigo-600"></span>
+                              )}
+                           </button>
+                        </div>
                      </div>
 
                      {/* Advanced Filters Panel */}
@@ -4501,6 +4547,7 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
                                     setHistoryTillDate('');
                                     setAttendanceFilter('ALL');
                                     setAttendanceThreshold(75);
+                                    setHistoryBatchFilter('ALL');
                                     setShowFilters(false);
                                  }}
                                  className="px-4 py-2 bg-white hover:bg-rose-50 text-slate-600 hover:text-rose-600 rounded-xl text-xs font-bold border border-slate-200 transition-all"
@@ -4635,9 +4682,9 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
                                        ? `No student matches "${historySearchQuery}"` 
                                        : 'Try resetting your filter.'}
                                  </p>
-                                 {(historySearchQuery || historyQuickFilter !== 'ALL') && (
+                                 {(historySearchQuery || historyQuickFilter !== 'ALL' || historyBatchFilter !== 'ALL') && (
                                     <button
-                                       onClick={() => { setHistorySearchQuery(''); setHistoryQuickFilter('ALL'); }}
+                                       onClick={() => { setHistorySearchQuery(''); setHistoryQuickFilter('ALL'); setHistoryBatchFilter('ALL'); }}
                                        className="px-4 py-2 bg-indigo-50 text-indigo-700 text-xs font-bold rounded-xl"
                                     >
                                        Reset Filters
@@ -4821,7 +4868,24 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
                                        <tr>
                                           <td colSpan={colSpan} className="py-16 text-center text-slate-400">
                                              <Users className="h-10 w-10 mx-auto text-slate-200 mb-2" />
-                                             <p className="font-black text-xs uppercase tracking-widest text-slate-400">No student records match filters</p>
+                                             <p className="font-black text-xs uppercase tracking-widest text-slate-400 mb-3">No student records match filters</p>
+                                             {(historySearchQuery || historyQuickFilter !== 'ALL' || historyBatchFilter !== 'ALL' || historyFilterDate || historyStartDate || historyTillDate || attendanceFilter === 'CUSTOM') && (
+                                                <button
+                                                   onClick={() => {
+                                                      setHistorySearchQuery('');
+                                                      setHistoryQuickFilter('ALL');
+                                                      setHistoryBatchFilter('ALL');
+                                                      setHistoryFilterDate('');
+                                                      setHistoryStartDate('');
+                                                      setHistoryTillDate('');
+                                                      setAttendanceFilter('ALL');
+                                                      setAttendanceThreshold(75);
+                                                   }}
+                                                   className="px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-xl transition-all"
+                                                >
+                                                   Reset All Filters
+                                                </button>
+                                             )}
                                           </td>
                                        </tr>
                                     );
