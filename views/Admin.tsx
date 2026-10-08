@@ -2,18 +2,24 @@ import React, { useEffect, useState, useMemo } from 'react';
 import ExcelJS from 'exceljs';
 import { db } from '../services/db';
 import { supabase } from '../services/supabase';
-import { Branch, Batch, User, Subject, FacultyAssignment, AttendanceRecord, CoordinatorAssignment, Mark, SystemSettings, MidSemType } from '../types';
+import { Branch, Batch, User, Subject, FacultyAssignment, AttendanceRecord, CoordinatorAssignment, Mark, SystemSettings, MidSemType, SlotTiming, LunchBreakConfig } from '../types';
 import { Card, Button, Input, Select, Modal, FileUploader, ExportProgressModal } from '../components/UI';
-import { Plus, Trash2, ChevronRight, Users, BookOpen, Database, Key, ArrowLeft, CheckCircle2, XCircle, Trash, Eye, EyeOff, Layers, Edit2, Calendar, Smartphone, Filter, AlertCircle, AlertTriangle, Trophy, Settings, GripVertical, FileDown, Loader2, Activity, RefreshCw, MoreVertical, Archive, Download } from 'lucide-react';
+import { Plus, Trash2, ChevronRight, Users, BookOpen, Database, Key, ArrowLeft, CheckCircle2, XCircle, Trash, Eye, EyeOff, Layers, Edit2, Calendar, Smartphone, Filter, AlertCircle, AlertTriangle, Trophy, Settings, GripVertical, FileDown, Loader2, Activity, RefreshCw, MoreVertical, Archive, Download, Clock } from 'lucide-react';
 import { useNavigate, useLocation, Routes, Route, Navigate, useParams } from 'react-router-dom';
+import { DEFAULT_SLOT_TIMINGS, DEFAULT_LUNCH_BREAK } from '../constants';
 
 const SystemManagement: React.FC = () => {
   const [activeSubTab, setActiveSubTab] = useState<'config' | 'audit'>('config');
   const [openDropdownId, setOpenDropdownId] = useState<string | null>(null);
   const [settings, setSettings] = useState<SystemSettings>({ studentLoginEnabled: true });
+  const [slotTimings, setSlotTimings] = useState<SlotTiming[]>(DEFAULT_SLOT_TIMINGS);
+  const [lunchBreak, setLunchBreak] = useState<LunchBreakConfig>(DEFAULT_LUNCH_BREAK);
+  const [savingTimings, setSavingTimings] = useState(false);
+  const [timingsSaveSuccess, setTimingsSaveSuccess] = useState(false);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
   const [metaCache, setMetaCache] = useState<{
     branches: Record<string, string>;
     batches: Record<string, string>;
@@ -30,6 +36,16 @@ const SystemManagement: React.FC = () => {
       if (activeSubTab === 'config') {
         const s = await db.getSystemSettings();
         setSettings(s);
+        if (s.slotTimings && Array.isArray(s.slotTimings) && s.slotTimings.length > 0) {
+          setSlotTimings(s.slotTimings);
+        } else {
+          setSlotTimings(DEFAULT_SLOT_TIMINGS);
+        }
+        if (s.lunchBreak) {
+          setLunchBreak(s.lunchBreak);
+        } else {
+          setLunchBreak(DEFAULT_LUNCH_BREAK);
+        }
       } else {
         const [logs, branches, batches, subjects] = await Promise.all([
           db.getAuditLogs(50),
@@ -70,6 +86,44 @@ const SystemManagement: React.FC = () => {
     }
   };
 
+  const handleSlotChange = (slotIndex: number, field: 'startTime' | 'endTime', value: string) => {
+    setSlotTimings(prev => {
+      const updated = [...prev];
+      updated[slotIndex] = { ...updated[slotIndex], [field]: value };
+      return updated;
+    });
+  };
+
+  const handleLunchChange = (field: 'startTime' | 'endTime', value: string) => {
+    setLunchBreak(prev => ({ ...prev, [field]: value }));
+  };
+
+  const handleSaveTimings = async () => {
+    setSavingTimings(true);
+    try {
+      const updatedSettings: SystemSettings = {
+        ...settings,
+        slotTimings,
+        lunchBreak
+      };
+      await db.updateSystemSettings(updatedSettings);
+      setSettings(updatedSettings);
+      setTimingsSaveSuccess(true);
+      setTimeout(() => setTimingsSaveSuccess(false), 3000);
+    } catch (err: any) {
+      alert("Failed to save lecture slot timings: " + err.message);
+    } finally {
+      setSavingTimings(false);
+    }
+  };
+
+  const handleResetTimings = () => {
+    if (window.confirm("Reset all lecture slot timings and lunch break to standard Acropolis timings?")) {
+      setSlotTimings(DEFAULT_SLOT_TIMINGS);
+      setLunchBreak(DEFAULT_LUNCH_BREAK);
+    }
+  };
+
   const formatLogDetails = (log: any) => {
     const m = log.metadata;
     if (!m) return '-';
@@ -103,40 +157,178 @@ const SystemManagement: React.FC = () => {
       </div>
 
       {activeSubTab === 'config' ? (
-        <Card className="max-w-2xl">
-          <div className="space-y-6">
-            <div className="flex items-center gap-3 pb-4 border-b">
-              <Settings className="h-6 w-6 text-indigo-600" />
-              <h3 className="text-xl font-bold text-slate-900">System Configuration</h3>
-            </div>
-
-            <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-200">
-              <div>
-                <h4 className="font-bold text-slate-900">Student Login Access</h4>
-                <p className="text-sm text-slate-500">Control whether students can sign in to the application.</p>
+        <div className="space-y-6">
+          <Card className="max-w-2xl">
+            <div className="space-y-6">
+              <div className="flex items-center gap-3 pb-4 border-b">
+                <Settings className="h-6 w-6 text-indigo-600" />
+                <h3 className="text-xl font-bold text-slate-900">System Configuration</h3>
               </div>
-              <button
-                onClick={handleToggleStudentLogin}
-                disabled={saving}
-                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${settings.studentLoginEnabled ? 'bg-indigo-600' : 'bg-slate-300'}`}
-              >
-                <span
-                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${settings.studentLoginEnabled ? 'translate-x-6' : 'translate-x-1'}`}
-                />
-              </button>
-            </div>
 
-            <div className="bg-amber-50 border-l-4 border-amber-500 p-4">
-              <div className="flex items-start gap-3">
-                <AlertCircle className="h-5 w-5 text-amber-600 mt-0.5" />
-                <div className="text-sm text-amber-700">
-                  <p className="font-bold">Important Note</p>
-                  <p>Disabling student login will immediately hide the "Login as Student" option from the login screen and block any active student login attempts.</p>
+              <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-200">
+                <div>
+                  <h4 className="font-bold text-slate-900">Student Login Access</h4>
+                  <p className="text-sm text-slate-500">Control whether students can sign in to the application.</p>
+                </div>
+                <button
+                  onClick={handleToggleStudentLogin}
+                  disabled={saving}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${settings.studentLoginEnabled ? 'bg-indigo-600' : 'bg-slate-300'}`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${settings.studentLoginEnabled ? 'translate-x-6' : 'translate-x-1'}`}
+                  />
+                </button>
+              </div>
+
+              <div className="bg-amber-50 border-l-4 border-amber-500 p-4">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="h-5 w-5 text-amber-600 mt-0.5" />
+                  <div className="text-sm text-amber-700">
+                    <p className="font-bold">Important Note</p>
+                    <p>Disabling student login will immediately hide the "Login as Student" option from the login screen and block any active student login attempts.</p>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        </Card>
+          </Card>
+
+          {/* Lecture Slots & Lunch Break Configuration Card */}
+          <Card className="max-w-2xl">
+            <div className="space-y-6">
+              <div className="flex items-center justify-between pb-4 border-b">
+                <div className="flex items-center gap-3">
+                  <Clock className="h-6 w-6 text-indigo-600" />
+                  <div>
+                    <h3 className="text-xl font-bold text-slate-900">Lecture Slot Timings & Lunch Partition</h3>
+                    <p className="text-xs text-slate-500">Allot standard timing for each lecture period (1 to 7) and recess partition.</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleResetTimings}
+                  className="text-[11px] font-bold text-slate-500 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg transition-colors"
+                >
+                  Reset Defaults
+                </button>
+              </div>
+
+              {timingsSaveSuccess && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 text-xs font-bold flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                  Lecture slot timings saved successfully! Faculty will see updated timings immediately.
+                </div>
+              )}
+
+              <div className="space-y-3">
+                <div className="text-xs font-black uppercase tracking-wider text-slate-400">
+                  Morning Lectures (Periods 1 to 3)
+                </div>
+                {slotTimings.filter(t => t.slot <= (lunchBreak?.afterSlot || 3)).map((t, idx) => (
+                  <div key={t.slot} className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5 min-w-[120px]">
+                      <span className="w-7 h-7 rounded-lg bg-indigo-600 text-white font-black text-xs flex items-center justify-center">
+                        L{t.slot}
+                      </span>
+                      <span className="font-bold text-xs text-slate-900">Lecture {t.slot}</span>
+                    </div>
+                    <div className="flex items-center gap-2 flex-1 max-w-xs">
+                      <input
+                        type="text"
+                        value={t.startTime}
+                        onChange={(e) => handleSlotChange(idx, 'startTime', e.target.value)}
+                        placeholder="10:30 AM"
+                        className="w-1/2 px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 text-center focus:ring-2 focus:ring-indigo-500 outline-none"
+                      />
+                      <span className="text-slate-400 text-xs font-bold">to</span>
+                      <input
+                        type="text"
+                        value={t.endTime}
+                        onChange={(e) => handleSlotChange(idx, 'endTime', e.target.value)}
+                        placeholder="11:20 AM"
+                        className="w-1/2 px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 text-center focus:ring-2 focus:ring-indigo-500 outline-none"
+                      />
+                    </div>
+                  </div>
+                ))}
+
+                {/* Lunch Break Partition */}
+                <div className="my-3 p-3.5 bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-dashed border-amber-300 rounded-2xl flex items-center justify-between gap-3 shadow-sm">
+                  <div className="flex items-center gap-2.5 min-w-[140px]">
+                    <span className="w-8 h-8 rounded-xl bg-amber-500 text-white font-black text-sm flex items-center justify-center shadow-sm">
+                      🥪
+                    </span>
+                    <div>
+                      <div className="font-black text-xs text-amber-950 uppercase">Lunch Break</div>
+                      <div className="text-[10px] font-bold text-amber-700">Recess Partition (Not a lecture)</div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 flex-1 max-w-xs">
+                    <input
+                      type="text"
+                      value={lunchBreak.startTime}
+                      onChange={(e) => handleLunchChange('startTime', e.target.value)}
+                      placeholder="01:00 PM"
+                      className="w-1/2 px-2.5 py-1.5 bg-white border border-amber-200 rounded-lg text-xs font-bold text-slate-800 text-center focus:ring-2 focus:ring-amber-500 outline-none"
+                    />
+                    <span className="text-amber-500 text-xs font-bold">to</span>
+                    <input
+                      type="text"
+                      value={lunchBreak.endTime}
+                      onChange={(e) => handleLunchChange('endTime', e.target.value)}
+                      placeholder="01:40 PM"
+                      className="w-1/2 px-2.5 py-1.5 bg-white border border-amber-200 rounded-lg text-xs font-bold text-slate-800 text-center focus:ring-2 focus:ring-amber-500 outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="text-xs font-black uppercase tracking-wider text-slate-400 pt-2">
+                  Afternoon Lectures (Periods 4 to 7)
+                </div>
+                {slotTimings.filter(t => t.slot > (lunchBreak?.afterSlot || 3)).map((t, idx) => {
+                  const actualIdx = idx + (lunchBreak?.afterSlot || 3);
+                  return (
+                    <div key={t.slot} className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2.5 min-w-[120px]">
+                        <span className="w-7 h-7 rounded-lg bg-indigo-600 text-white font-black text-xs flex items-center justify-center">
+                          L{t.slot}
+                        </span>
+                        <span className="font-bold text-xs text-slate-900">Lecture {t.slot}</span>
+                      </div>
+                      <div className="flex items-center gap-2 flex-1 max-w-xs">
+                        <input
+                          type="text"
+                          value={t.startTime}
+                          onChange={(e) => handleSlotChange(actualIdx, 'startTime', e.target.value)}
+                          placeholder="01:40 PM"
+                          className="w-1/2 px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 text-center focus:ring-2 focus:ring-indigo-500 outline-none"
+                        />
+                        <span className="text-slate-400 text-xs font-bold">to</span>
+                        <input
+                          type="text"
+                          value={t.endTime}
+                          onChange={(e) => handleSlotChange(actualIdx, 'endTime', e.target.value)}
+                          placeholder="02:30 PM"
+                          className="w-1/2 px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 text-center focus:ring-2 focus:ring-indigo-500 outline-none"
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="pt-4 border-t flex justify-end">
+                <Button
+                  onClick={handleSaveTimings}
+                  disabled={savingTimings}
+                  className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black uppercase tracking-wider rounded-xl shadow-lg shadow-indigo-200"
+                >
+                  {savingTimings ? "Saving Timings..." : "Save Lecture Timings"}
+                </Button>
+              </div>
+            </div>
+          </Card>
+        </div>
       ) : (
         <Card className="p-0 overflow-hidden">
           <div className="px-6 py-4 bg-slate-50 border-b border-slate-100 flex justify-between items-center">

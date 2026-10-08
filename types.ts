@@ -107,6 +107,23 @@ export interface Mark {
   updatedAt?: string;
 }
 
+export interface SlotTiming {
+  slot: number;
+  startTime: string;
+  endTime: string;
+  label?: string;
+}
+
+export interface LunchBreakConfig {
+  startTime: string;
+  endTime: string;
+  afterSlot: number;
+  label?: string;
+}
+
 export interface SystemSettings {
   studentLoginEnabled: boolean;
+  slotTimings?: SlotTiming[];
+  lunchBreak?: LunchBreakConfig;
 }
+

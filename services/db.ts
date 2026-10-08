@@ -1,6 +1,6 @@
 import { supabase, authClient, getYearMode, isConfigured } from './supabase';
 import { User, Branch, Batch, Subject, FacultyAssignment, CoordinatorAssignment, AttendanceRecord, UserRole, Notification, MidSemType, Mark, SystemSettings } from "../types";
-import { SEED_BRANCHES, SEED_BATCHES, SEED_SUBJECTS, SEED_USERS, SEED_ASSIGNMENTS } from "../constants";
+import { SEED_BRANCHES, SEED_BATCHES, SEED_SUBJECTS, SEED_USERS, SEED_ASSIGNMENTS, DEFAULT_SLOT_TIMINGS, DEFAULT_LUNCH_BREAK } from "../constants";
 
 // --- Service Interface ---
 interface IDataService {
@@ -1588,14 +1588,66 @@ class SupabaseService implements IDataService {
   }
 
   async getSystemSettings(): Promise<SystemSettings> {
-    const { data, error } = await supabase.from('system_settings').select('*').eq('id', 'default').single();
-    if (error) throw error;
-    return { studentLoginEnabled: data?.student_login_enabled ?? true };
+    try {
+      const { data, error } = await supabase.from('system_settings').select('*').eq('id', 'default').single();
+      const localSlotTimings = localStorage.getItem('acro_slot_timings');
+      const localLunchBreak = localStorage.getItem('acro_lunch_break');
+
+      let slotTimings = data?.slot_timings;
+      if (!slotTimings && localSlotTimings) {
+        try { slotTimings = JSON.parse(localSlotTimings); } catch (e) {}
+      }
+      if (!slotTimings || !Array.isArray(slotTimings) || slotTimings.length === 0) {
+        slotTimings = DEFAULT_SLOT_TIMINGS;
+      }
+
+      let lunchBreak = data?.lunch_break;
+      if (!lunchBreak && localLunchBreak) {
+        try { lunchBreak = JSON.parse(localLunchBreak); } catch (e) {}
+      }
+      if (!lunchBreak || typeof lunchBreak !== 'object') {
+        lunchBreak = DEFAULT_LUNCH_BREAK;
+      }
+
+      return {
+        studentLoginEnabled: data?.student_login_enabled ?? true,
+        slotTimings,
+        lunchBreak
+      };
+    } catch (err) {
+      console.warn("Failed to load system settings from DB, using defaults:", err);
+      return {
+        studentLoginEnabled: true,
+        slotTimings: DEFAULT_SLOT_TIMINGS,
+        lunchBreak: DEFAULT_LUNCH_BREAK
+      };
+    }
   }
 
   async updateSystemSettings(settings: SystemSettings): Promise<void> {
-    const { error } = await supabase.from('system_settings').upsert({ id: 'default', student_login_enabled: settings.studentLoginEnabled });
-    if (error) throw error;
+    if (settings.slotTimings) {
+      localStorage.setItem('acro_slot_timings', JSON.stringify(settings.slotTimings));
+    }
+    if (settings.lunchBreak) {
+      localStorage.setItem('acro_lunch_break', JSON.stringify(settings.lunchBreak));
+    }
+
+    try {
+      const payload: any = {
+        id: 'default',
+        student_login_enabled: settings.studentLoginEnabled,
+        slot_timings: settings.slotTimings || DEFAULT_SLOT_TIMINGS,
+        lunch_break: settings.lunchBreak || DEFAULT_LUNCH_BREAK
+      };
+      const { error } = await supabase.from('system_settings').upsert(payload);
+      if (error) {
+        // If slot_timings column does not exist yet in SQL, upsert only student_login_enabled to not fail
+        console.warn('Upsert with slot_timings failed, falling back to basic settings:', error);
+        await supabase.from('system_settings').upsert({ id: 'default', student_login_enabled: settings.studentLoginEnabled });
+      }
+    } catch (err) {
+      console.warn("Failed to update system settings in DB:", err);
+    }
   }
 
   async getUsersCount(): Promise<number> {
@@ -2365,8 +2417,19 @@ class MockService implements IDataService {
 
   async getSystemSettings(): Promise<SystemSettings> {
     const data = localStorage.getItem('ams_settings');
-    if (!data) return { studentLoginEnabled: true };
-    return JSON.parse(data);
+    if (!data) {
+      return { 
+        studentLoginEnabled: true,
+        slotTimings: DEFAULT_SLOT_TIMINGS,
+        lunchBreak: DEFAULT_LUNCH_BREAK
+      };
+    }
+    const parsed = JSON.parse(data);
+    return {
+      studentLoginEnabled: parsed.studentLoginEnabled ?? true,
+      slotTimings: parsed.slotTimings || DEFAULT_SLOT_TIMINGS,
+      lunchBreak: parsed.lunchBreak || DEFAULT_LUNCH_BREAK
+    };
   }
 
   async updateSystemSettings(settings: SystemSettings): Promise<void> {

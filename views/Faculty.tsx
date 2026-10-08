@@ -7,11 +7,13 @@ import {
    Save, History, FileDown, Filter, ArrowLeft, CheckCircle2, ChevronDown, Check, X,
    CheckSquare, Square, XCircle, AlertCircle, AlertTriangle, Trash, Loader2,
    Calendar, RefreshCw, Layers, Eye, BookOpen, User as UserIcon, Activity, Users, Trophy, Upload, Share2,
-   Search, UserCheck, UserX, ChevronRight, ArrowRightLeft
+   Search, UserCheck, UserX, ChevronRight, ArrowRightLeft, Clock
 } from 'lucide-react';
 import { useNavigate, useLocation, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { Skeleton, SkeletonRow, SkeletonCard } from '../components/Skeleton';
 import { OverwriteShiftModal } from '../components/OverwriteShiftModal';
+import { DEFAULT_SLOT_TIMINGS, DEFAULT_LUNCH_BREAK } from '../constants';
+import { SlotTiming, LunchBreakConfig } from '../types';
 
 interface FacultyProps { user: User; forceCoordinatorView?: boolean; }
 
@@ -1906,11 +1908,17 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
    }, [metaData.lockedBranches, selBranchId]);
 
    const setSelection = (brid: string, sid: string) => {
-      // Auto-populate batches when subject is selected to ensure student list appears
+      // Auto-populate batches when theory subject is selected to ensure student list appears,
+      // but for LAB subjects: DO NOT default select batch, ask faculty to select the batch first!
       if (brid && sid) {
-         const rel = assignments.filter(a => a.branchId === brid && a.subjectId === sid);
-         const batchesToSelect = rel.map(a => a.batchId);
-         setSelectedMarkingBatches(batchesToSelect);
+         const isLab = metaData.subjects[sid]?.type === 'lab';
+         if (isLab) {
+            setSelectedMarkingBatches([]);
+         } else {
+            const rel = assignments.filter(a => a.branchId === brid && a.subjectId === sid);
+            const batchesToSelect = rel.map(a => a.batchId);
+            setSelectedMarkingBatches(batchesToSelect);
+         }
       } else {
          setSelectedMarkingBatches([]);
       }
@@ -1946,6 +1954,9 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
    const [allBranchStudents, setAllBranchStudents] = useState<User[]>([]); // Cache all students in branch
    const [attendanceDate, setAttendanceDate] = useState(new Date().toISOString().split('T')[0]);
    const [selectedSlots, setSelectedSlots] = useState<number[]>([]);
+   const [slotTimings, setSlotTimings] = useState<SlotTiming[]>(DEFAULT_SLOT_TIMINGS);
+   const [lunchBreak, setLunchBreak] = useState<LunchBreakConfig>(DEFAULT_LUNCH_BREAK);
+   const [isSlotModalOpen, setIsSlotModalOpen] = useState(false);
    const [attendanceStatus, setAttendanceStatus] = useState<Record<string, boolean>>({});
    const [saveMessage, setSaveMessage] = useState('');
    const [allClassRecords, setAllClassRecords] = useState<AttendanceRecord[]>([]);
@@ -2022,11 +2033,19 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
             db.getAssignments(user.uid),
             db.getCoordinatorsByFaculty(user.uid)
          ]);
-         const [allBranches, allSubjects, allFaculty] = await Promise.all([
+         const [allBranches, allSubjects, allFaculty, sysSettings] = await Promise.all([
             db.getBranches(),
             db.getSubjects(),
-            db.getFaculty()
+            db.getFaculty(),
+            db.getSystemSettings().catch(() => ({ studentLoginEnabled: true, slotTimings: DEFAULT_SLOT_TIMINGS, lunchBreak: DEFAULT_LUNCH_BREAK }))
          ]);
+
+         if (sysSettings?.slotTimings && Array.isArray(sysSettings.slotTimings) && sysSettings.slotTimings.length > 0) {
+            setSlotTimings(sysSettings.slotTimings);
+         }
+         if (sysSettings?.lunchBreak) {
+            setLunchBreak(sysSettings.lunchBreak);
+         }
 
          const branchMap: Record<string, string> = {};
          const lockedMap: Record<string, boolean> = {};
@@ -2127,6 +2146,12 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
    // 3. Initialize Batch Selection when Subject/Branch changes
    useEffect(() => {
       if (selBranchId && selSubjectId) {
+         const isLab = metaData.subjects[selSubjectId]?.type === 'lab';
+         if (isLab) {
+            // Lab subject: DO NOT by default select batch. Ask faculty to select the batch first.
+            setSelectedMarkingBatches([]);
+            return;
+         }
          // Find all relevant batches for this subject assignment
          // Logic: If assigned 'ALL' -> Select all batches in branch.
          // If assigned specific -> Select specific.
@@ -2140,7 +2165,7 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
          }
          setSelectedMarkingBatches(batchesToSelect);
       }
-   }, [selBranchId, selSubjectId, assignments, metaData.rawBatches]);
+   }, [selBranchId, selSubjectId, assignments, metaData.rawBatches, metaData.subjects]);
 
    // 3. Reset marking selection when Branch or Subject changes to prevent cross-class mistakes
    useEffect(() => {
@@ -2439,14 +2464,19 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
    ]);
 
 
+   const isLabSubject = useMemo(() => metaData.subjects[selSubjectId]?.type === 'lab', [metaData.subjects, selSubjectId]);
+   const isMarkingDisabled = useMemo(() => {
+      return selectedSlots.length === 0 || (isLabSubject && selectedMarkingBatches.length === 0);
+   }, [selectedSlots.length, isLabSubject, selectedMarkingBatches.length]);
+
    // --- Handlers ---
    const handleMark = (uid: string) => {
-      if (selectedSlots.length === 0) return;
+      if (isMarkingDisabled) return;
       setAttendanceStatus(prev => ({ ...prev, [uid]: !prev[uid] }));
    };
 
    const handleMarkAll = (status: boolean) => {
-      if (selectedSlots.length === 0) return;
+      if (isMarkingDisabled) return;
       const newStatus: Record<string, boolean> = {};
       visibleStudents.forEach(s => newStatus[s.uid] = status);
       setAttendanceStatus(prev => ({ ...prev, ...newStatus }));
@@ -2638,8 +2668,8 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
    };
 
    const handleSaveClick = async () => {
-      if (selectedSlots.length === 0) return;
-      if (visibleStudents.length === 0) { alert("No students selected."); return; }
+      if (isMarkingDisabled) return;
+      if (visibleStudents.length === 0) { alert(isLabSubject && selectedMarkingBatches.length === 0 ? "Please select a lab batch first." : "No students selected."); return; }
 
       const latestBranches = await db.getBranches();
       const currentBranch = latestBranches.find(b => b.id === selBranchId);
@@ -3736,10 +3766,18 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
                                  <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">Student Groups</label>
                                  <button
                                     onClick={() => setIsBatchDropdownOpen(!isBatchDropdownOpen)}
-                                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-900 flex justify-between items-center transition-all active:scale-[0.98]"
+                                    className={`w-full px-3 py-2 bg-white border rounded-xl text-xs font-bold flex justify-between items-center transition-all active:scale-[0.98] ${
+                                       selectedMarkingBatches.length === 0
+                                          ? 'border-amber-400 bg-amber-50/50 text-amber-900 ring-2 ring-amber-400/20'
+                                          : 'border-slate-200 text-slate-900'
+                                    }`}
                                  >
-                                    <span className="truncate">{selectedMarkingBatches.length > 0 ? `${selectedMarkingBatches.length} Sel` : 'Select'}</span>
-                                    <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
+                                    <span className="truncate">
+                                       {selectedMarkingBatches.length > 0
+                                          ? (sameSubjectBatches.filter(b => selectedMarkingBatches.includes(b.id)).map(b => b.name).join(', ') || `${selectedMarkingBatches.length} Sel`)
+                                          : '⚠️ Select Batch First'}
+                                    </span>
+                                    <ChevronDown className="h-3.5 w-3.5 text-slate-400 shrink-0 ml-1" />
                                  </button>
 
                                  {isBatchDropdownOpen && (
@@ -3771,58 +3809,307 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
                         </div>
 
                         <div className="space-y-2">
-                           <div className="space-y-1">
+                           <div className="space-y-1.5">
                               <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest">
                                  <span className="inline-flex items-center gap-1.5">
-                                    <span>Lecture Periods</span>
-                                    <span
-                                       className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-indigo-50 text-[10px] font-black text-indigo-600 cursor-help"
-                                       title="Select at least one slot before saving attendance."
-                                       aria-label="Slot selection info"
-                                    >
-                                       ℹ️
-                                    </span>
+                                    <Clock className="h-3 w-3 text-indigo-500" />
+                                    <span>Select Attendance Slot</span>
                                  </span>
                               </label>
-                              <div className="flex gap-2 scrollbar-none overflow-x-auto pb-1">
-                                 {[1, 2, 3, 4, 5, 6, 7].map(slot => (
-                                    <button
-                                       key={slot}
-                                       onClick={() => toggleSlot(slot)}
-                                       aria-pressed={selectedSlots.includes(slot)}
-                                       className={`flex-shrink-0 w-10 h-10 rounded-xl text-xs font-black transition-all border-2 ${selectedSlots.includes(slot) ? 'bg-indigo-600 border-indigo-600 text-white shadow-2xl shadow-indigo-300/70 animate-pulse' : 'bg-white border-slate-100 text-slate-400'}`}
-                                    >
-                                       {slot}
-                                    </button>
-                                 ))}
-                              </div>
+
+                              {/* Labeled Option Trigger Button */}
+                              <button
+                                 type="button"
+                                 onClick={() => setIsSlotModalOpen(true)}
+                                 className={`w-full px-3.5 py-2.5 rounded-xl border-2 text-left flex items-center justify-between transition-all active:scale-[0.99] ${
+                                    selectedSlots.length > 0
+                                       ? 'bg-indigo-50/60 border-indigo-400 text-indigo-950 shadow-sm'
+                                       : 'bg-white border-slate-200 hover:border-indigo-300 text-slate-600'
+                                 }`}
+                              >
+                                 <div className="flex items-center gap-2.5 min-w-0">
+                                    <div className={`p-1.5 rounded-lg ${selectedSlots.length > 0 ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                                       <Clock className="h-4 w-4" />
+                                    </div>
+                                    <div className="truncate">
+                                       {selectedSlots.length === 0 ? (
+                                          <div className="text-xs font-bold text-slate-600">
+                                             Tap to Select Lecture Slot...
+                                          </div>
+                                       ) : selectedSlots.length === 1 ? (
+                                          <div className="text-xs font-black text-indigo-950 truncate">
+                                             <span>Lecture {selectedSlots[0]}</span>
+                                             {slotTimings.find(t => t.slot === selectedSlots[0]) && (
+                                                <span className="ml-1.5 font-bold text-[11px] text-indigo-600">
+                                                   ({slotTimings.find(t => t.slot === selectedSlots[0])?.startTime} – {slotTimings.find(t => t.slot === selectedSlots[0])?.endTime})
+                                                </span>
+                                             )}
+                                          </div>
+                                       ) : (
+                                          <div className="text-xs font-black text-indigo-950 truncate">
+                                             {selectedSlots.length} Slots Selected: {selectedSlots.map(s => `L${s}`).join(', ')}
+                                          </div>
+                                       )}
+                                    </div>
+                                 </div>
+                                 <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                                    {selectedSlots.length > 0 ? (
+                                       <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
+                                          Change
+                                       </span>
+                                    ) : (
+                                       <ChevronRight className="h-4 w-4 text-slate-400" />
+                                    )}
+                                 </div>
+                              </button>
+
+                              {/* Selected Slots Chips for quick visibility & removal */}
+                              {selectedSlots.length > 0 && (
+                                 <div className="flex flex-wrap gap-1.5 pt-1">
+                                    {selectedSlots.map(slotNum => {
+                                       const timing = slotTimings.find(t => t.slot === slotNum);
+                                       return (
+                                          <span
+                                             key={slotNum}
+                                             className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-100/90 text-indigo-900 text-[11px] font-bold border border-indigo-200 shadow-xs"
+                                          >
+                                             <span>Lecture {slotNum}</span>
+                                             {timing && <span className="text-[10px] text-indigo-600 font-semibold">({timing.startTime} – {timing.endTime})</span>}
+                                             <button
+                                                type="button"
+                                                onClick={(e) => {
+                                                   e.stopPropagation();
+                                                   toggleSlot(slotNum);
+                                                }}
+                                                className="ml-1 p-0.5 hover:bg-indigo-200 rounded-full text-indigo-700 hover:text-indigo-900 transition-colors"
+                                                title={`Remove Slot ${slotNum}`}
+                                             >
+                                                <X className="h-3 w-3" />
+                                             </button>
+                                          </span>
+                                       );
+                                    })}
+                                 </div>
+                              )}
                            </div>
                         </div>
                      </div>
 
+                     {/* Locked Warning: Slot Not Selected */}
                      {selectedSlots.length === 0 && (
-                        <div className="animate-in fade-in slide-in-from-top-2 duration-500">
-                           <div className="rounded-2xl border-2 border-amber-500 bg-amber-50 p-4 shadow-lg shadow-amber-100/50">
+                        <div className="animate-in fade-in slide-in-from-top-2 duration-500 mb-2">
+                           <div className="rounded-2xl border-2 border-amber-500 bg-amber-50 p-4 shadow-lg shadow-amber-100/50 flex items-center justify-between gap-3">
                               <div className="flex items-center gap-3">
-                                 <div className="p-2.5 bg-amber-500 rounded-xl text-white shadow-lg shadow-amber-200">
-                                    <AlertTriangle className="h-5 w-5" />
+                                 <div className="p-2.5 bg-amber-500 rounded-xl text-white shadow-lg shadow-amber-200 shrink-0">
+                                    <Clock className="h-5 w-5" />
                                  </div>
                                  <div>
                                     <h4 className="text-xs font-black text-amber-900 uppercase tracking-tight">Register Locked</h4>
-                                    <p className="text-[10px] font-bold text-amber-700 uppercase tracking-wide">Choose a lecture slot above to start marking the attendance.</p>
+                                    <p className="text-[10px] font-bold text-amber-700 uppercase tracking-wide">Select attendance slot above to start marking attendance.</p>
+                                 </div>
+                              </div>
+                              <button
+                                 type="button"
+                                 onClick={() => setIsSlotModalOpen(true)}
+                                 className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-black uppercase tracking-wider rounded-xl shadow transition-all active:scale-95 shrink-0"
+                              >
+                                 Select Slot
+                              </button>
+                           </div>
+                        </div>
+                     )}
+
+                     {/* Locked Warning: Lab Batch Not Selected */}
+                     {isLabSubject && selectedMarkingBatches.length === 0 && (
+                        <div className="animate-in fade-in slide-in-from-top-2 duration-500 mb-2">
+                           <div className="rounded-2xl border-2 border-indigo-500 bg-indigo-50/90 p-4 shadow-lg shadow-indigo-100/50 flex items-center justify-between gap-3">
+                              <div className="flex items-center gap-3">
+                                 <div className="p-2.5 bg-indigo-600 rounded-xl text-white shadow-lg shadow-indigo-200 shrink-0">
+                                    <Users className="h-5 w-5" />
+                                 </div>
+                                 <div>
+                                    <h4 className="text-xs font-black text-indigo-950 uppercase tracking-tight">Lab Batch Selection Required</h4>
+                                    <p className="text-[10px] font-bold text-indigo-700 uppercase tracking-wide">Please choose your lab batch (student group) before marking attendance.</p>
+                                 </div>
+                              </div>
+                              <button
+                                 type="button"
+                                 onClick={() => setIsBatchDropdownOpen(true)}
+                                 className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black uppercase tracking-wider rounded-xl shadow transition-all active:scale-95 shrink-0"
+                              >
+                                 Select Batch
+                              </button>
+                           </div>
+                        </div>
+                     )}
+
+                     {/* Slot Selection Modal with Partition of Lunch Break */}
+                     {isSlotModalOpen && (
+                        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+                           <div 
+                              className="bg-white w-full max-w-md rounded-3xl shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-200"
+                              onClick={e => e.stopPropagation()}
+                           >
+                              {/* Modal Header */}
+                              <div className="px-5 py-4 bg-gradient-to-r from-slate-900 to-indigo-950 text-white flex items-center justify-between">
+                                 <div className="flex items-center gap-3">
+                                    <div className="p-2 bg-indigo-500/20 border border-indigo-400/30 rounded-xl">
+                                       <Clock className="h-5 w-5 text-indigo-300" />
+                                    </div>
+                                    <div>
+                                       <h3 className="text-sm font-black uppercase tracking-wider text-white">Select Attendance Slot</h3>
+                                       <p className="text-[11px] font-medium text-slate-300">Admin-allotted lecture periods schedule</p>
+                                    </div>
+                                 </div>
+                                 <button
+                                    onClick={() => setIsSlotModalOpen(false)}
+                                    className="p-1.5 text-slate-400 hover:text-white rounded-full hover:bg-white/10 transition-colors"
+                                 >
+                                    <X className="h-5 w-5" />
+                                 </button>
+                              </div>
+
+                              {/* Modal Body: Slots List */}
+                              <div className="p-4 space-y-2.5 overflow-y-auto">
+                                 {/* Morning Slots: Periods 1 to 3 */}
+                                 {slotTimings.filter(t => t.slot <= (lunchBreak?.afterSlot || 3)).map(timing => {
+                                    const isSelected = selectedSlots.includes(timing.slot);
+                                    return (
+                                       <div
+                                          key={timing.slot}
+                                          onClick={() => toggleSlot(timing.slot)}
+                                          className={`p-3 rounded-2xl cursor-pointer border-2 transition-all flex items-center justify-between active:scale-[0.99] ${
+                                             isSelected
+                                                ? 'bg-indigo-50 border-indigo-600 text-indigo-950 shadow-md shadow-indigo-100'
+                                                : 'bg-white border-slate-200 hover:border-slate-300 text-slate-800 hover:bg-slate-50'
+                                          }`}
+                                       >
+                                          <div className="flex items-center gap-3">
+                                             <div className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-xs ${
+                                                isSelected ? 'bg-indigo-600 text-white shadow' : 'bg-slate-100 text-slate-600'
+                                             }`}>
+                                                L{timing.slot}
+                                             </div>
+                                             <div>
+                                                <div className="text-xs font-black">
+                                                   Lecture {timing.slot}
+                                                </div>
+                                                <div className="text-[11px] font-semibold text-slate-500">
+                                                   {timing.startTime} – {timing.endTime}
+                                                </div>
+                                             </div>
+                                          </div>
+                                          <div className={`w-6 h-6 rounded-lg flex items-center justify-center transition-all ${
+                                             isSelected ? 'bg-indigo-600 text-white' : 'border-2 border-slate-300'
+                                          }`}>
+                                             {isSelected && <Check className="h-4 w-4 stroke-[3]" />}
+                                          </div>
+                                       </div>
+                                    );
+                                 })}
+
+                                 {/* LUNCH BREAK PARTITION (Non-selectable, visual divider) */}
+                                 <div className="my-3 p-3.5 rounded-2xl bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-dashed border-amber-300/80 flex items-center justify-between shadow-sm">
+                                    <div className="flex items-center gap-3">
+                                       <div className="w-9 h-9 rounded-xl bg-amber-500 text-white flex items-center justify-center text-lg shadow-sm">
+                                          🥪
+                                       </div>
+                                       <div>
+                                          <div className="flex items-center gap-2">
+                                             <span className="text-xs font-black text-amber-950 uppercase tracking-wide">
+                                                {lunchBreak?.label || 'Lunch Break'}
+                                             </span>
+                                             <span className="text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-200 text-amber-900">
+                                                Recess
+                                             </span>
+                                          </div>
+                                          <div className="text-[11px] font-bold text-amber-800">
+                                             {lunchBreak?.startTime || '01:00 PM'} – {lunchBreak?.endTime || '01:40 PM'}
+                                          </div>
+                                       </div>
+                                    </div>
+                                    <span className="text-[10px] font-black text-amber-700 uppercase tracking-tight bg-white/70 px-2.5 py-1 rounded-lg border border-amber-200">
+                                       Not a Lecture
+                                    </span>
+                                 </div>
+
+                                 {/* Afternoon Slots: Periods 4 to 7 */}
+                                 {slotTimings.filter(t => t.slot > (lunchBreak?.afterSlot || 3)).map(timing => {
+                                    const isSelected = selectedSlots.includes(timing.slot);
+                                    return (
+                                       <div
+                                          key={timing.slot}
+                                          onClick={() => toggleSlot(timing.slot)}
+                                          className={`p-3 rounded-2xl cursor-pointer border-2 transition-all flex items-center justify-between active:scale-[0.99] ${
+                                             isSelected
+                                                ? 'bg-indigo-50 border-indigo-600 text-indigo-950 shadow-md shadow-indigo-100'
+                                                : 'bg-white border-slate-200 hover:border-slate-300 text-slate-800 hover:bg-slate-50'
+                                          }`}
+                                       >
+                                          <div className="flex items-center gap-3">
+                                             <div className={`w-8 h-8 rounded-xl flex items-center justify-center font-black text-xs ${
+                                                isSelected ? 'bg-indigo-600 text-white shadow' : 'bg-slate-100 text-slate-600'
+                                             }`}>
+                                                L{timing.slot}
+                                             </div>
+                                             <div>
+                                                <div className="text-xs font-black">
+                                                   Lecture {timing.slot}
+                                                </div>
+                                                <div className="text-[11px] font-semibold text-slate-500">
+                                                   {timing.startTime} – {timing.endTime}
+                                                </div>
+                                             </div>
+                                          </div>
+                                          <div className={`w-6 h-6 rounded-lg flex items-center justify-center transition-all ${
+                                             isSelected ? 'bg-indigo-600 text-white' : 'border-2 border-slate-300'
+                                          }`}>
+                                             {isSelected && <Check className="h-4 w-4 stroke-[3]" />}
+                                          </div>
+                                       </div>
+                                    );
+                                 })}
+                              </div>
+
+                              {/* Modal Footer */}
+                              <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-100 flex items-center justify-between gap-3">
+                                 <div className="text-xs font-bold text-slate-600">
+                                    {selectedSlots.length === 0 ? (
+                                       <span className="text-amber-600">No slot selected</span>
+                                    ) : (
+                                       <span className="text-indigo-600 font-black">{selectedSlots.length} slot{selectedSlots.length > 1 ? 's' : ''} selected</span>
+                                    )}
+                                 </div>
+                                 <div className="flex items-center gap-2">
+                                    {selectedSlots.length > 0 && (
+                                       <button
+                                          type="button"
+                                          onClick={() => setSelectedSlots([])}
+                                          className="px-3 py-1.5 text-xs font-bold text-rose-600 hover:bg-rose-50 rounded-xl transition-colors"
+                                       >
+                                          Clear
+                                       </button>
+                                    )}
+                                    <button
+                                       type="button"
+                                       onClick={() => setIsSlotModalOpen(false)}
+                                       className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black uppercase tracking-wider rounded-xl shadow-lg shadow-indigo-200 transition-all active:scale-95"
+                                    >
+                                       Done
+                                    </button>
                                  </div>
                               </div>
                            </div>
                         </div>
                      )}
 
-                     <div className={`flex gap-2 transition-all duration-300 ${selectedSlots.length === 0 ? 'opacity-50 pointer-events-none' : ''}`}>
-                        <button onClick={() => handleMarkAll(true)} className="flex-1 py-2 bg-emerald-50 text-emerald-700 active:bg-emerald-100 rounded-xl border border-emerald-100 text-[10px] font-black uppercase tracking-widest transition-all">Mark All Present</button>
-                        <button onClick={() => handleMarkAll(false)} className="flex-1 py-2 bg-rose-50 text-rose-700 active:bg-rose-100 rounded-xl border border-rose-100 text-[10px] font-black uppercase tracking-widest transition-all">Mark All Absent</button>
+                     <div className={`flex gap-2 transition-all duration-300 ${isMarkingDisabled ? 'opacity-50 pointer-events-none' : ''}`}>
+                        <button onClick={() => handleMarkAll(true)} disabled={isMarkingDisabled} className="flex-1 py-2 bg-emerald-50 text-emerald-700 active:bg-emerald-100 rounded-xl border border-emerald-100 text-[10px] font-black uppercase tracking-widest transition-all">Mark All Present</button>
+                        <button onClick={() => handleMarkAll(false)} disabled={isMarkingDisabled} className="flex-1 py-2 bg-rose-50 text-rose-700 active:bg-rose-100 rounded-xl border border-rose-100 text-[10px] font-black uppercase tracking-widest transition-all">Mark All Absent</button>
                      </div>
 
                      {/* Mobile Student List (Cards) */}
-                     <div className={`md:hidden space-y-3 pb-20 relative transition-all duration-300 ${selectedSlots.length === 0 ? 'opacity-50 pointer-events-none grayscale-[0.5]' : ''}`}>
+                     <div className={`md:hidden space-y-3 pb-20 relative transition-all duration-300 ${isMarkingDisabled ? 'opacity-50 pointer-events-none grayscale-[0.5]' : ''}`}>
                         {loadingStudents ? (
                            Array.from({ length: 5 }).map((_, i) => (
                               <div key={i} className="bg-white p-4 rounded-lg shadow-sm border border-slate-200 space-y-3">
@@ -3893,7 +4180,7 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
                      </div>
 
                      {/* Desktop Student List (Table) */}
-                     <div className={`hidden md:block bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden relative transition-all duration-300 ${selectedSlots.length === 0 ? 'opacity-50 pointer-events-none grayscale-[0.5]' : ''}`}>
+                     <div className={`hidden md:block bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden relative transition-all duration-300 ${isMarkingDisabled ? 'opacity-50 pointer-events-none grayscale-[0.5]' : ''}`}>
                         <table className="w-full text-left border-collapse">
                            <thead className="bg-slate-50 border-b border-slate-200">
                               <tr>
@@ -3947,7 +4234,7 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
                                        );
                                     })}
                                     {visibleStudents.length === 0 && (
-                                       <tr><td colSpan={3} className="p-8 text-center text-slate-400">No students found in selected batches.</td></tr>
+                                       <tr><td colSpan={3} className="p-8 text-center text-slate-400 font-bold text-xs">{isLabSubject && selectedMarkingBatches.length === 0 ? "Please select a student group / batch above to load students." : "No students found in selected batches."}</td></tr>
                                     )}
                                  </>
                               )}
@@ -3974,7 +4261,7 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
                            )}
                            <button
                               onClick={handleSaveClick}
-                              disabled={isSaving || selectedSlots.length === 0}
+                              disabled={isSaving || isMarkingDisabled}
                               className={`h-14 px-10 w-full md:w-auto rounded-3xl font-black text-xs uppercase tracking-[0.1em] shadow-2xl transition-all active:scale-[0.98] disabled:opacity-50 flex items-center justify-center gap-3 ${isEditMode ? 'bg-orange-600 text-white shadow-orange-200' : 'bg-indigo-600 text-white shadow-indigo-200 hover:bg-indigo-700'}`}
                            >
                               {isSaving ? (

@@ -139,7 +139,9 @@ CREATE TABLE IF NOT EXISTS public.notifications (
 -- ------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.system_settings (
     id TEXT PRIMARY KEY,
-    student_login_enabled BOOLEAN DEFAULT true
+    student_login_enabled BOOLEAN DEFAULT true,
+    slot_timings JSONB DEFAULT NULL,
+    lunch_break JSONB DEFAULT NULL
 );
 
 -- ------------------------------------------------------------------------------

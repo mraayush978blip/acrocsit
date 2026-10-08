@@ -93,3 +93,21 @@ export const SEED_ASSIGNMENTS: FacultyAssignment[] = [
     subjectId: 'sub_network'
   }
 ];
+
+export const DEFAULT_SLOT_TIMINGS: import('./types').SlotTiming[] = [
+  { slot: 1, startTime: '10:30 AM', endTime: '11:20 AM', label: 'Lecture 1' },
+  { slot: 2, startTime: '11:20 AM', endTime: '12:10 PM', label: 'Lecture 2' },
+  { slot: 3, startTime: '12:10 PM', endTime: '01:00 PM', label: 'Lecture 3' },
+  { slot: 4, startTime: '01:40 PM', endTime: '02:30 PM', label: 'Lecture 4' },
+  { slot: 5, startTime: '02:30 PM', endTime: '03:20 PM', label: 'Lecture 5' },
+  { slot: 6, startTime: '03:20 PM', endTime: '04:10 PM', label: 'Lecture 6' },
+  { slot: 7, startTime: '04:10 PM', endTime: '05:00 PM', label: 'Lecture 7' },
+];
+
+export const DEFAULT_LUNCH_BREAK: import('./types').LunchBreakConfig = {
+  startTime: '01:00 PM',
+  endTime: '01:40 PM',
+  afterSlot: 3,
+  label: 'Lunch Break'
+};
+
