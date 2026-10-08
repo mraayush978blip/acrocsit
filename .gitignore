@@ -25,3 +25,7 @@ dist-ssr
 
 *.env
 supabase/*.sql
+
+# Reports & scratch
+AcroAMS_Internship_Report.*
+generate_html_report.py

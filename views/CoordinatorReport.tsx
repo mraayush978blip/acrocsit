@@ -170,8 +170,15 @@ export const CoordinatorReport: React.FC<CoordinatorReportProps> = ({ branchId, 
          const studentStats = filteredStudents.map(s => {
             const studentRecs = previewRecords.filter(r => r.studentId === s.uid);
             const studentRegularRecs = studentRecs.filter(r => r.subjectId !== 'sub_extra');
-            const presentCount = studentRegularRecs.filter(r => r.isPresent).length;
-            const totalSessions = studentRegularRecs.length;
+            const sessionMap = new Map<string, typeof studentRegularRecs[0]>();
+            studentRegularRecs.forEach(r => {
+               const k = `${r.date}_${r.lectureSlot || 1}_${r.subjectId}`;
+               const ex = sessionMap.get(k);
+               if (!ex || (!ex.isPresent && r.isPresent)) sessionMap.set(k, r);
+            });
+            const uniqueRegular = Array.from(sessionMap.values());
+            const presentCount = uniqueRegular.filter(r => r.isPresent).length;
+            const totalSessions = uniqueRegular.length;
             const extraCount = studentRecs.filter(r => r.subjectId === 'sub_extra' && r.isPresent).length;
             const pct = totalSessions === 0 ? 0 : ((presentCount + extraCount) / totalSessions) * 100;
             return { name: s.displayName, pct };
@@ -222,12 +229,19 @@ export const CoordinatorReport: React.FC<CoordinatorReportProps> = ({ branchId, 
             const batchDataRows = batchStudents.map(s => {
                const studentRecs = previewRecords.filter(r => r.studentId === s.uid);
                const studentRegularRecs = regularRecs.filter(r => r.studentId === s.uid);
-               const studentTotalSessions = studentRegularRecs.length;
-               const presentCount = studentRegularRecs.filter(r => r.isPresent).length;
+               const sessionMap = new Map<string, typeof studentRegularRecs[0]>();
+               studentRegularRecs.forEach(r => {
+                  const k = `${r.date}_${r.lectureSlot || 1}_${r.subjectId}`;
+                  const ex = sessionMap.get(k);
+                  if (!ex || (!ex.isPresent && r.isPresent)) sessionMap.set(k, r);
+               });
+               const uniqueRegular = Array.from(sessionMap.values());
+               const studentTotalSessions = uniqueRegular.length;
+               const presentCount = uniqueRegular.filter(r => r.isPresent).length;
                const extraCount = studentRecs.filter(r => r.subjectId === 'sub_extra' && r.isPresent).length;
 
                const subjectAttendance = uniqueSubjectIds.map(sid => {
-                  return studentRegularRecs.filter(r => r.subjectId === sid && r.isPresent).length.toString();
+                  return uniqueRegular.filter(r => r.subjectId === sid && r.isPresent).length.toString();
                });
 
                const pct = studentTotalSessions === 0 ? 0 : Math.round(((presentCount + extraCount) / studentTotalSessions) * 100);

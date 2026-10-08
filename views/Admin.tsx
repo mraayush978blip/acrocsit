@@ -2692,13 +2692,22 @@ const ReportManagement: React.FC = () => {
 
       const allBranchStudents = [...students].sort((a, b) => (a.studentData?.rollNo || '').localeCompare(b.studentData?.rollNo || '', undefined, { numeric: true }));
 
-      // --- 2. Stats Calculation (Optimized O(N+M)) ---
-      const studentStatsMap = new Map<string, { present: number, total: number }>();
+      // --- 2. Stats Calculation (Deduplicated O(N+M)) ---
+      const studentSessionMap = new Map<string, Map<string, typeof regularRecs[0]>>();
       regularRecs.forEach(r => {
-        const current = studentStatsMap.get(r.studentId) || { present: 0, total: 0 };
-        studentStatsMap.set(r.studentId, {
-          present: current.present + (r.isPresent ? 1 : 0),
-          total: current.total + 1
+        if (!studentSessionMap.has(r.studentId)) studentSessionMap.set(r.studentId, new Map());
+        const userMap = studentSessionMap.get(r.studentId)!;
+        const k = `${r.date}_${r.lectureSlot || 1}_${r.subjectId}`;
+        const ex = userMap.get(k);
+        if (!ex || (!ex.isPresent && r.isPresent)) userMap.set(k, r);
+      });
+
+      const studentStatsMap = new Map<string, { present: number, total: number }>();
+      studentSessionMap.forEach((userMap, studentId) => {
+        const uniqueRecs = Array.from(userMap.values());
+        studentStatsMap.set(studentId, {
+          present: uniqueRecs.filter(r => r.isPresent).length,
+          total: uniqueRecs.length
         });
       });
 
@@ -2714,9 +2723,10 @@ const ReportManagement: React.FC = () => {
 
       const studentStats = filteredForExport.map(s => {
         const studentRecs = recordsToExport.filter(r => r.studentId === s.uid);
-        const studentRegularRecs = studentRecs.filter(r => r.subjectId !== 'sub_extra');
-        const presentCount = studentRegularRecs.filter(r => r.isPresent).length;
-        const totalSessions = studentRegularRecs.length;
+        const userMap = studentSessionMap.get(s.uid) || new Map();
+        const uniqueRegular = Array.from(userMap.values());
+        const presentCount = uniqueRegular.filter(r => r.isPresent).length;
+        const totalSessions = uniqueRegular.length;
         const extraCount = studentRecs.filter(r => r.subjectId === 'sub_extra' && r.isPresent).length;
         const pct = totalSessions === 0 ? 0 : ((presentCount + extraCount) / totalSessions) * 100;
         return { name: s.displayName, pct };
@@ -2772,12 +2782,19 @@ const ReportManagement: React.FC = () => {
         const batchDataRows = batchStudents.map(s => {
           const studentRecs = recordsToExport.filter(r => r.studentId === s.uid);
           const studentRegularRecs = regularRecs.filter(r => r.studentId === s.uid);
-          const presentCount = studentRegularRecs.filter(r => r.isPresent).length;
-          const totalSessions = studentRegularRecs.length;
+          const sessionMap = new Map<string, typeof studentRegularRecs[0]>();
+          studentRegularRecs.forEach(r => {
+            const k = `${r.date}_${r.lectureSlot || 1}_${r.subjectId}`;
+            const ex = sessionMap.get(k);
+            if (!ex || (!ex.isPresent && r.isPresent)) sessionMap.set(k, r);
+          });
+          const uniqueRegular = Array.from(sessionMap.values());
+          const presentCount = uniqueRegular.filter(r => r.isPresent).length;
+          const totalSessions = uniqueRegular.length;
           const extraCount = studentRecs.filter(r => r.subjectId === 'sub_extra' && r.isPresent).length;
 
           const subjectAttendance = uniqueSubjectIds.map(sid => {
-            return studentRegularRecs.filter(r => r.subjectId === sid && r.isPresent).length.toString();
+            return uniqueRegular.filter(r => r.subjectId === sid && r.isPresent).length.toString();
           });
 
           const pct = totalSessions === 0 ? 0 : Math.round(((presentCount + extraCount) / totalSessions) * 100);
@@ -3298,8 +3315,15 @@ const ReportManagement: React.FC = () => {
                             if (exportSubjectType === 'LAB' && subj?.type !== 'lab') return false;
                             return true;
                           });
-                          const total = regularMine.length;
-                          const present = regularMine.filter(r => r.isPresent).length;
+                          const sessionMap = new Map<string, typeof regularMine[0]>();
+                          regularMine.forEach(r => {
+                            const k = `${r.date}_${r.lectureSlot || 1}_${r.subjectId}`;
+                            const ex = sessionMap.get(k);
+                            if (!ex || (!ex.isPresent && r.isPresent)) sessionMap.set(k, r);
+                          });
+                          const uniqueRegular = Array.from(sessionMap.values());
+                          const total = uniqueRegular.length;
+                          const present = uniqueRegular.filter(r => r.isPresent).length;
                           const extraCount = mine.filter(r => r.subjectId === 'sub_extra' && r.isPresent).length;
                           const pct = total === 0 ? 0 : Math.round(((present + extraCount) / total) * 100);
                           if (attendanceOperator === 'GE') return pct >= attendanceThreshold;
@@ -3347,8 +3371,15 @@ const ReportManagement: React.FC = () => {
                             if (exportSubjectType === 'LAB' && subj?.type !== 'lab') return false;
                             return true;
                           });
-                          const total = regularMine.length;
-                          const present = regularMine.filter(r => r.isPresent).length;
+                          const sessionMap = new Map<string, typeof regularMine[0]>();
+                          regularMine.forEach(r => {
+                            const k = `${r.date}_${r.lectureSlot || 1}_${r.subjectId}`;
+                            const ex = sessionMap.get(k);
+                            if (!ex || (!ex.isPresent && r.isPresent)) sessionMap.set(k, r);
+                          });
+                          const uniqueRegular = Array.from(sessionMap.values());
+                          const total = uniqueRegular.length;
+                          const present = uniqueRegular.filter(r => r.isPresent).length;
                           const extraCount = mine.filter(r => r.subjectId === 'sub_extra' && r.isPresent).length;
                           const pct = total === 0 ? 0 : Math.round(((present + extraCount) / total) * 100);
                           rows.push(

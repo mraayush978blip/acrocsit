@@ -756,10 +756,20 @@ class SupabaseService implements IDataService {
       const subjectTypeMap = new Map<string, string>();
       (subjects || []).forEach(s => subjectTypeMap.set(s.id, s.type));
 
-      const { data: attRecs, error: attErr } = await supabase.from('attendance')
-        .select('id, date, student_id, subject_id, lecture_slot, marked_by, timestamp, batch_id')
-        .eq('branch_id', branchId);
-      if (attErr || !attRecs || attRecs.length === 0) return;
+      let attRecs: any[] = [];
+      let page = 0;
+      const pageSize = 1000;
+      while (true) {
+        const { data, error: attErr } = await supabase.from('attendance')
+          .select('id, date, student_id, subject_id, lecture_slot, marked_by, timestamp, batch_id')
+          .eq('branch_id', branchId)
+          .range(page * pageSize, (page + 1) * pageSize - 1);
+        if (attErr) throw attErr;
+        attRecs = attRecs.concat(data || []);
+        if (!data || data.length < pageSize) break;
+        page++;
+      }
+      if (attRecs.length === 0) return;
 
       const theorySessions = new Map<string, any>();
       const labSessions = new Map<string, any>();
@@ -790,7 +800,7 @@ class SupabaseService implements IDataService {
           const checkKey = `${student.id}_${sess.subject_id}_${sess.date}_${slot}`;
           if (!studentAttKeys.has(checkKey)) {
             recordsToInsert.push({
-              id: `att_${student.id.substring(0, 5)}_${Date.now()}_${recordsToInsert.length}`,
+              id: `${sess.date}_${student.id}_L${slot}`,
               date: sess.date,
               student_id: student.id,
               subject_id: sess.subject_id,
@@ -812,7 +822,7 @@ class SupabaseService implements IDataService {
             const checkKey = `${student.id}_${sess.subject_id}_${sess.date}_${slot}`;
             if (!studentAttKeys.has(checkKey)) {
               recordsToInsert.push({
-                id: `att_${student.id.substring(0, 5)}_${Date.now()}_${recordsToInsert.length}`,
+                id: `${sess.date}_${student.id}_L${slot}`,
                 date: sess.date,
                 student_id: student.id,
                 subject_id: sess.subject_id,
@@ -832,7 +842,7 @@ class SupabaseService implements IDataService {
 
       if (recordsToInsert.length > 0) {
         for (let i = 0; i < recordsToInsert.length; i += 500) {
-          await supabase.from('attendance').insert(recordsToInsert.slice(i, i + 500));
+          await supabase.from('attendance').upsert(recordsToInsert.slice(i, i + 500));
         }
         this._invalidate('attendance_*');
       }
