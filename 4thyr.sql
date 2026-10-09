@@ -144,6 +144,11 @@ CREATE TABLE IF NOT EXISTS public.system_settings (
     lunch_break JSONB DEFAULT NULL
 );
 
+-- Ensure columns exist even if table was already created in an earlier migration
+ALTER TABLE public.system_settings 
+ADD COLUMN IF NOT EXISTS slot_timings JSONB DEFAULT NULL,
+ADD COLUMN IF NOT EXISTS lunch_break JSONB DEFAULT NULL;
+
 -- ------------------------------------------------------------------------------
 -- 12. DELETED ATTENDANCE (RECYCLE BIN)
 -- ------------------------------------------------------------------------------
@@ -177,15 +182,39 @@ CREATE TABLE IF NOT EXISTS public.audit_logs (
 -- ------------------------------------------------------------------------------
 -- SEED DATA
 -- ------------------------------------------------------------------------------
--- 1. Default system settings
-INSERT INTO public.system_settings (id, student_login_enabled) 
-VALUES ('default', true) 
-ON CONFLICT (id) DO NOTHING;
+-- 1. Default system settings with standard lecture slot timings & lunch break configuration
+INSERT INTO public.system_settings (id, student_login_enabled, slot_timings, lunch_break) 
+VALUES (
+    'default', 
+    true,
+    '[
+        {"slot": 1, "startTime": "10:30 AM", "endTime": "11:20 AM", "label": "Lecture 1"},
+        {"slot": 2, "startTime": "11:20 AM", "endTime": "12:10 PM", "label": "Lecture 2"},
+        {"slot": 3, "startTime": "12:10 PM", "endTime": "01:00 PM", "label": "Lecture 3"},
+        {"slot": 4, "startTime": "01:40 PM", "endTime": "02:30 PM", "label": "Lecture 4"},
+        {"slot": 5, "startTime": "02:30 PM", "endTime": "03:20 PM", "label": "Lecture 5"},
+        {"slot": 6, "startTime": "03:20 PM", "endTime": "04:10 PM", "label": "Lecture 6"},
+        {"slot": 7, "startTime": "04:10 PM", "endTime": "05:00 PM", "label": "Lecture 7"}
+    ]'::jsonb,
+    '{
+        "startTime": "01:00 PM",
+        "endTime": "01:40 PM",
+        "afterSlot": 3,
+        "label": "Lunch Break"
+    }'::jsonb
+) 
+ON CONFLICT (id) DO UPDATE SET
+    student_login_enabled = COALESCE(public.system_settings.student_login_enabled, EXCLUDED.student_login_enabled),
+    slot_timings = COALESCE(public.system_settings.slot_timings, EXCLUDED.slot_timings),
+    lunch_break = COALESCE(public.system_settings.lunch_break, EXCLUDED.lunch_break);
 
 -- 2. Mandatory coordinator 'sub_extra' subject
 INSERT INTO public.subjects (id, name, code, type) 
 VALUES ('sub_extra', 'Extra Lectures', 'EXTRA', 'theory') 
-ON CONFLICT (id) DO NOTHING;
+ON CONFLICT (id) DO UPDATE SET
+    name = EXCLUDED.name,
+    code = EXCLUDED.code,
+    type = EXCLUDED.type;
 
 -- 3. Initial Admin and Developer accounts in whitelist (prevents RLS lockout)
 INSERT INTO public.whitelist (email, role) VALUES 
@@ -566,7 +595,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON public.audit_logs(timesta
 -- ------------------------------------------------------------------------------
 -- SUPABASE REALTIME CONFIGURATION
 -- ------------------------------------------------------------------------------
--- Enables live updates for Admin Attendance Monitor
+-- Enables live updates for Admin Attendance Monitor and instant notifications
 DO $$
 BEGIN
     IF NOT EXISTS (
@@ -576,6 +605,15 @@ BEGIN
           AND tablename = 'attendance'
     ) THEN
         ALTER PUBLICATION supabase_realtime ADD TABLE public.attendance;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_publication_tables 
+        WHERE pubname = 'supabase_realtime' 
+          AND schemaname = 'public' 
+          AND tablename = 'notifications'
+    ) THEN
+        ALTER PUBLICATION supabase_realtime ADD TABLE public.notifications;
     END IF;
 END $$;
 
