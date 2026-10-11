@@ -1453,7 +1453,7 @@ class SupabaseService implements IDataService {
     const now = Date.now();
     const shiftedRows = records.map(r => {
         let newId = `${r.date}_${r.student_id}_L${toSlot}`;
-        if (r.id && r.id.startsWith('extra_')) {
+        if (r.subject_id === 'sub_extra' || (r.id && r.id.startsWith('extra_'))) {
             newId = `extra_${r.branch_id}_${r.date}_S${toSlot}_${r.student_id}`;
         }
         return {
@@ -2341,7 +2341,7 @@ class MockService implements IDataService {
       if (a.date === date && a.branchId === branchId && (a.lectureSlot || 1) === fromSlot) {
         count++;
         let newId = `${a.date}_${a.studentId}_L${toSlot}`;
-        if (a.id && a.id.startsWith('extra_')) {
+        if (a.subjectId === 'sub_extra' || (a.id && a.id.startsWith('extra_'))) {
           newId = `extra_${a.branchId}_${a.date}_S${toSlot}_${a.studentId}`;
         }
         return {
