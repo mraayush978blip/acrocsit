@@ -1238,11 +1238,14 @@ class SupabaseService implements IDataService {
 
     // Conflict Check: Check if any record already exists in the main attendance table
     for (const r of records) {
+       if (r.subject_id === 'sub_extra') continue;
+
        const { data: existing } = await supabase.from('attendance')
           .select('marked_by, profiles(display_name)')
           .eq('date', r.date)
           .eq('branch_id', r.branch_id)
           .eq('lecture_slot', r.lecture_slot)
+          .neq('subject_id', 'sub_extra')
           .maybeSingle();
 
        if (existing) {
@@ -1354,8 +1357,27 @@ class SupabaseService implements IDataService {
       lecture_slot: r.lectureSlot,
       reason: r.reason
     }));
-    const { error } = await supabase.from('attendance').upsert(rows);
-    if (error) throw error;
+    let { error } = await supabase.from('attendance').upsert(rows);
+
+    // If an RLS or session timeout error occurs, attempt a transparent session refresh and retry
+    if (error && (error.message?.includes('row-level security') || error.code === '42501' || error.message?.includes('JWT') || error.message?.includes('token'))) {
+      try {
+        const { data: refreshData, error: refreshErr } = await supabase.auth.refreshSession();
+        if (!refreshErr && refreshData?.session) {
+          const retry = await supabase.from('attendance').upsert(rows);
+          error = retry.error;
+        }
+      } catch (reauthErr) {
+        // Fallback to error handling below
+      }
+    }
+
+    if (error) {
+      if (error.message?.includes('row-level security') || error.code === '42501') {
+        throw new Error("Your login session has expired or timed out due to being inactive on the portal. Please refresh the page or re-login to save attendance.");
+      }
+      throw error;
+    }
     
     // Background Log
     this.logAudit('SAVE_ATTENDANCE', { 
@@ -2240,6 +2262,7 @@ class MockService implements IDataService {
             branchId: branchId,
             batchId: sBatch,
             isPresent: false,
+            markedBy: sess.markedBy || 'SYSTEM',
             timestamp: sess.timestamp,
             lectureSlot: slot,
             reason: 'Added late to class'
@@ -2261,6 +2284,7 @@ class MockService implements IDataService {
               branchId: branchId,
               batchId: sBatch,
               isPresent: false,
+              markedBy: sess.markedBy || 'SYSTEM',
               timestamp: sess.timestamp,
               lectureSlot: slot,
               reason: 'Added late to class'
@@ -2585,10 +2609,12 @@ class MockService implements IDataService {
     const toRestore = allDeleted.filter(a => idsSet.has(a.id));
     
     for (const r of toRestore) {
+        if (r.subjectId === 'sub_extra') continue;
         const conflict = allAttendance.find(a => 
             r.date === a.date && 
             r.branchId === a.branchId && 
-            r.lectureSlot === a.lectureSlot
+            r.lectureSlot === a.lectureSlot &&
+            a.subjectId !== 'sub_extra'
         );
         if (conflict) {
             return { status: 'CONFLICT', currentMarkedBy: conflict.markedBy, conflictData: r };

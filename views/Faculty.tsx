@@ -2718,10 +2718,27 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
          let conflictIds: string[] = [];
          const visibleIds = new Set(visibleStudents.map(s => s.uid));
 
-         // Iterate through selected slots and visible students
+         // If we are marking extra attendance (sub_extra), do NOT check for conflict with lectures.
+         // Extra attendance is granted for events/competitions and co-exists with regular lecture attendance.
+         if (selSubjectId === 'sub_extra') {
+            for (const slot of selectedSlots) {
+               const existingExtraRecords = branchRecords.filter(r =>
+                  r.subjectId === 'sub_extra' && r.lectureSlot === slot && visibleIds.has(r.studentId)
+               );
+               if (existingExtraRecords.length > 0) {
+                  conflictIds = [...conflictIds, ...existingExtraRecords.map(r => r.id)];
+               }
+            }
+            setIdsToDelete(conflictIds);
+            setConflictDetails(null);
+            setShowConfirmModal(true);
+            return;
+         }
+
+         // Iterate through selected slots and visible students (excluding sub_extra)
          for (const slot of selectedSlots) {
             const overlappingRecords = branchRecords.filter(r =>
-               r.lectureSlot === slot && visibleIds.has(r.studentId)
+               r.lectureSlot === slot && visibleIds.has(r.studentId) && r.subjectId !== 'sub_extra'
             );
 
             if (overlappingRecords.length > 0) {
@@ -2773,12 +2790,14 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
       selectedSlots.forEach(slot => {
          visibleStudents.forEach(s => {
             records.push({
-               id: `${attendanceDate}_${s.uid}_L${slot}`,
+               id: selSubjectId === 'sub_extra'
+                  ? `extra_${selBranchId}_${attendanceDate}_S${slot}_${s.uid}`
+                  : `${attendanceDate}_${s.uid}_L${slot}`,
                date: attendanceDate,
                studentId: s.uid,
                subjectId: selSubjectId,
                branchId: selBranchId,
-               batchId: s.studentData!.batchId!,
+               batchId: s.studentData?.batchId || 'ALL',
                isPresent: attendanceStatus[s.uid] ?? true,
                markedBy: user.uid,
                timestamp: timestamp,
@@ -2869,7 +2888,9 @@ export const FacultyDashboard: React.FC<FacultyProps> = ({ user, forceCoordinato
          setShowConfirmModal(false);
       } catch (e: any) {
          if (e.code === 'permission-denied') {
-            setNetworkError("PERMISSION DENIED: You cannot overwrite existing attendance. Please update Firestore Rules to allow write for the attendance collection.");
+            setNetworkError("PERMISSION DENIED: You cannot overwrite existing attendance. Please update database rules to allow write for the attendance collection.");
+         } else if (e.message?.includes('row-level security') || e.code === '42501' || e.message?.includes('session has expired')) {
+            setNetworkError(e.message || "Session Expired: You have been inactive on the portal for a long time. Please refresh the page or re-login to save attendance.");
          } else {
             setNetworkError(`Error saving: ${e.message || 'Please retry.'}`);
          }

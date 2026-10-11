@@ -85,7 +85,7 @@ export const OverwriteShiftModal: React.FC<OverwriteShiftModalProps> = ({
         });
 
         const computedSlots: SlotDetail[] = [1, 2, 3, 4, 5, 6, 7].map(slotNum => {
-          const recs = dayRecords.filter(r => (r.lectureSlot || 1) === slotNum);
+          const recs = dayRecords.filter(r => (r.lectureSlot || 1) === slotNum && r.subjectId !== 'sub_extra');
           const first = recs[0];
           const isConflicting = slotNum === notification.data.slot;
           const isEmpty = recs.length === 0;

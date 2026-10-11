@@ -2,7 +2,7 @@ import React, { useEffect, useState, lazy, Suspense } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { db } from './services/db';
-import { isConfigured, getYearMode, getYearDisplayName, getYearUnavailableMessage, isYearConfigured, getFirstConfiguredYear, setYearMode } from './services/supabase';
+import { isConfigured, getYearMode, getYearDisplayName, getYearUnavailableMessage, isYearConfigured, getFirstConfiguredYear, setYearMode, supabase } from './services/supabase';
 import { User, UserRole } from './types';
 import { Login } from './views/Login';
 import { Landing } from './views/Landing';
@@ -146,6 +146,22 @@ const App: React.FC = () => {
       }
     };
     checkUser();
+
+    // Keep auth state in sync with token refresh or sign-out
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_OUT') {
+        setUser(null);
+      } else if (event === 'TOKEN_REFRESHED' || event === 'SIGNED_IN') {
+        if (session?.user) {
+          const u = await db.getCurrentUser();
+          setUser(u);
+        }
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
   }, []);
 
   const handleLogin = (loggedInUser: User) => {
