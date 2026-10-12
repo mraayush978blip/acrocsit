@@ -193,56 +193,76 @@ const CoordinatorReport: React.FC<CoordinatorReportProps> = ({ branchId, branchN
       return { sessions: regularSessions, totalRecords };
    }, [previewRecords, exportSubjectType, metaData.subjects]);
 
-   const filteredStudents = useMemo(() => {
-      if (filterMode === 'FULL') return students;
-      return students.filter(s => {
-         const relevantRegular = previewRecords.filter(r => {
-            if (r.studentId !== s.uid || r.subjectId === 'sub_extra') return false;
+   const batchTotalSessionsMap = useMemo(() => {
+      const map = new Map<string, number>();
+      const batchesMap = new Map<string, User[]>();
+      students.forEach(s => {
+         const bId = s.studentData?.batchId || 'UNASSIGNED';
+         if (!batchesMap.has(bId)) batchesMap.set(bId, []);
+         batchesMap.get(bId)!.push(s);
+      });
+
+      batchesMap.forEach((batchStudents, bId) => {
+         const batchRegularRecs = previewRecords.filter(r => {
+            if (r.subjectId === 'sub_extra') return false;
             const subj = metaData.subjects[r.subjectId];
             if (exportSubjectType === 'THEORY' && subj?.type === 'lab') return false;
             if (exportSubjectType === 'LAB' && subj?.type !== 'lab') return false;
-            return true;
+            return r.batchId === bId || r.batchId === 'ALL' || batchStudents.some(bs => bs.uid === r.studentId);
          });
-         const present = relevantRegular.filter(r => r.isPresent).length;
-         const pct = previewStats.sessions === 0 ? 0 : (present / previewStats.sessions) * 100;
+
+         const sessionKeys = new Set(batchRegularRecs.map(r => `${r.date}_${r.lectureSlot || 1}_${r.subjectId}`));
+         map.set(bId, sessionKeys.size);
+      });
+
+      return map;
+   }, [students, previewRecords, exportSubjectType, metaData.subjects]);
+
+   const getStudentEffectivePct = (s: User) => {
+      const bId = s.studentData?.batchId || 'UNASSIGNED';
+      const batchSessions = batchTotalSessionsMap.get(bId) || 0;
+
+      const relevantRegular = previewRecords.filter(r => {
+         if (r.studentId !== s.uid || r.subjectId === 'sub_extra') return false;
+         const subj = metaData.subjects[r.subjectId];
+         if (exportSubjectType === 'THEORY' && subj?.type === 'lab') return false;
+         if (exportSubjectType === 'LAB' && subj?.type !== 'lab') return false;
+         return true;
+      });
+      const sessionMap = new Map<string, typeof relevantRegular[0]>();
+      relevantRegular.forEach(r => {
+         const k = `${r.date}_${r.lectureSlot || 1}_${r.subjectId}`;
+         const ex = sessionMap.get(k);
+         if (!ex || (!ex.isPresent && r.isPresent)) sessionMap.set(k, r);
+      });
+      const present = Array.from(sessionMap.values()).filter(r => r.isPresent).length;
+      const extra = previewRecords.filter(r => r.studentId === s.uid && r.subjectId === 'sub_extra' && r.isPresent).length;
+
+      const total = batchSessions > 0 ? batchSessions : (previewStats.sessions || sessionMap.size);
+      return total === 0 ? 0 : Math.round(((present + extra) / total) * 100);
+   };
+
+   const filteredStudents = useMemo(() => {
+      if (filterMode === 'FULL') return students;
+      return students.filter(s => {
+         const pct = getStudentEffectivePct(s);
          if (filterCondition === 'LT') return pct < filterValue;
          if (filterCondition === 'GT') return pct > filterValue;
          if (filterCondition === 'LE') return pct <= filterValue;
          if (filterCondition === 'GE') return pct >= filterValue;
          return true;
       });
-   }, [students, previewRecords, previewStats.sessions, filterMode, filterCondition, filterValue, exportSubjectType, metaData.subjects]);
+   }, [students, filterMode, filterCondition, filterValue, batchTotalSessionsMap, previewRecords, exportSubjectType, metaData.subjects, previewStats.sessions]);
 
    const averageAttendance = useMemo(() => {
       if (filteredStudents.length === 0) return '0%';
-      const totalPct = filteredStudents.reduce((acc, s) => {
-         const relevantRegular = previewRecords.filter(r => {
-            if (r.studentId !== s.uid || r.subjectId === 'sub_extra') return false;
-            const subj = metaData.subjects[r.subjectId];
-            if (exportSubjectType === 'THEORY' && subj?.type === 'lab') return false;
-            if (exportSubjectType === 'LAB' && subj?.type !== 'lab') return false;
-            return true;
-         });
-         const present = relevantRegular.filter(r => r.isPresent).length;
-         return acc + (previewStats.sessions === 0 ? 0 : (present / previewStats.sessions) * 100);
-      }, 0);
+      const totalPct = filteredStudents.reduce((acc, s) => acc + getStudentEffectivePct(s), 0);
       return Math.round(totalPct / filteredStudents.length) + '%';
-   }, [filteredStudents, previewRecords, previewStats.sessions, exportSubjectType, metaData.subjects]);
+   }, [filteredStudents, batchTotalSessionsMap, previewRecords, exportSubjectType, metaData.subjects, previewStats.sessions]);
 
    const lowAttendanceCount = useMemo(() => {
-      return filteredStudents.filter(s => {
-         const relevantRegular = previewRecords.filter(r => {
-            if (r.studentId !== s.uid || r.subjectId === 'sub_extra') return false;
-            const subj = metaData.subjects[r.subjectId];
-            if (exportSubjectType === 'THEORY' && subj?.type === 'lab') return false;
-            if (exportSubjectType === 'LAB' && subj?.type !== 'lab') return false;
-            return true;
-         });
-         const present = relevantRegular.filter(r => r.isPresent).length;
-         const pct = previewStats.sessions === 0 ? 0 : (present / previewStats.sessions) * 100;
-         return pct < 75;
-      }).length;
-   }, [filteredStudents, previewRecords, previewStats.sessions, exportSubjectType, metaData.subjects]);
+      return filteredStudents.filter(s => getStudentEffectivePct(s) < 75).length;
+   }, [filteredStudents, batchTotalSessionsMap, previewRecords, exportSubjectType, metaData.subjects, previewStats.sessions]);
 
    const executeExport = async () => {
       setLoading(true);
@@ -357,11 +377,11 @@ const CoordinatorReport: React.FC<CoordinatorReportProps> = ({ branchId, branchN
             const batchNameStr = metaData.batches?.[batchId] || batchId;
 
             // Find all records that apply to this batch specifically or to the whole class
-            const batchRegularRecs = regularRecs.filter(r => r.batchId === batchId || r.batchId === 'ALL');
+            const batchRegularRecs = regularRecs.filter(r => r.batchId === batchId || r.batchId === 'ALL' || batchStudents.some(bs => bs.uid === r.studentId));
 
             const batchSubjectSessionCounts: Record<string, number> = {};
             uniqueSubjectIds.forEach(sid => {
-               const batchSubjectSessions = new Set(batchRegularRecs.filter(r => r.subjectId === sid).map(r => `${r.date}_${r.lectureSlot}`)).size;
+               const batchSubjectSessions = new Set(batchRegularRecs.filter(r => r.subjectId === sid).map(r => `${r.date}_${r.lectureSlot || 1}`)).size;
                batchSubjectSessionCounts[sid] = batchSubjectSessions;
             });
 
@@ -392,7 +412,8 @@ const CoordinatorReport: React.FC<CoordinatorReportProps> = ({ branchId, branchN
                   return uniqueRegular.filter(r => r.subjectId === sid && r.isPresent).length.toString();
                });
 
-               const pct = studentTotalSessions === 0 ? 0 : Math.round(((presentCount + extraCount) / studentTotalSessions) * 100);
+               const effectiveTotalLectures = batchTotalLectures > 0 ? batchTotalLectures : studentTotalSessions;
+               const pct = effectiveTotalLectures === 0 ? 0 : Math.round(((presentCount + extraCount) / effectiveTotalLectures) * 100);
 
                return [
                   s.studentData?.rollNo || '',
@@ -400,7 +421,7 @@ const CoordinatorReport: React.FC<CoordinatorReportProps> = ({ branchId, branchN
                   s.studentData?.enrollmentId || '',
                   ...subjectAttendance,
                   extraCount.toString(),
-                  studentTotalSessions.toString(),
+                  effectiveTotalLectures.toString(),
                   (presentCount + extraCount).toString(),
                   `${pct}%`
                ];
@@ -869,10 +890,11 @@ const CoordinatorReport: React.FC<CoordinatorReportProps> = ({ branchId, branchN
 
                         return Array.from(previewBatchesMap.entries()).map(([batchId, batchStudents]) => {
                            const batchNameStr = metaData.batches?.[batchId] || batchId;
+                           const batchTotalSessions = batchTotalSessionsMap.get(batchId) || 0;
                            return (
                               <tbody key={batchId} className="divide-y divide-slate-50">
                                  <tr className="bg-indigo-50/50">
-                                    <td colSpan={5} className="p-3 text-[10px] font-black tracking-widest text-indigo-800 uppercase text-center focus:bg-indigo-100 shadow-sm">
+                                    <td colSpan={6} className="p-3 text-[10px] font-black tracking-widest text-indigo-800 uppercase text-center focus:bg-indigo-100 shadow-sm">
                                        {`>>> BATCH: ${batchNameStr} <<<`}
                                     </td>
                                  </tr>
@@ -896,7 +918,8 @@ const CoordinatorReport: React.FC<CoordinatorReportProps> = ({ branchId, branchN
                                     const studentTotalSessions = uniqueRegular.length;
                                     const regularAtt = uniqueRegular.filter(r => r.isPresent).length;
                                     const extraAtt = previewRecords.filter(r => r.studentId === s.uid && r.subjectId === 'sub_extra' && r.isPresent).length;
-                                    const pct = studentTotalSessions === 0 ? 0 : Math.round(((regularAtt + extraAtt) / studentTotalSessions) * 100);
+                                    const effectiveTotal = batchTotalSessions > 0 ? batchTotalSessions : (studentTotalSessions || previewStats.sessions);
+                                    const pct = effectiveTotal === 0 ? 0 : Math.round(((regularAtt + extraAtt) / effectiveTotal) * 100);
 
                                     return (
                                        <tr key={s.uid} className="hover:bg-slate-50/50 transition-colors">
@@ -905,11 +928,11 @@ const CoordinatorReport: React.FC<CoordinatorReportProps> = ({ branchId, branchN
                                              <div className="font-black text-slate-800 uppercase tracking-tight text-xs">{s.displayName}</div>
                                              <div className="text-[9px] font-mono text-slate-900">{s.studentData?.enrollmentId}</div>
                                           </td>
-                                          <td className="p-4 text-center font-black text-indigo-600 text-xs">{regularAtt}/{studentTotalSessions}</td>
+                                          <td className="p-4 text-center font-black text-indigo-600 text-xs">{regularAtt}/{effectiveTotal}</td>
                                           <td className="p-4 text-center">
                                              <span className="px-2 py-0.5 bg-amber-50 text-amber-600 rounded-lg text-[10px] font-black">+{extraAtt}</span>
                                           </td>
-                                          <td className="p-4 text-center font-black text-indigo-600 text-xs">{regularAtt + extraAtt}/{studentTotalSessions}</td>
+                                          <td className="p-4 text-center font-black text-indigo-600 text-xs">{regularAtt + extraAtt}/{effectiveTotal}</td>
                                           <td className="p-4 text-right">
                                              <div className={`inline-flex items-center px-3 py-1 rounded-full text-[10px] font-black tracking-widest ${pct < 75 ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-600'}`}>
                                                 {pct}%
