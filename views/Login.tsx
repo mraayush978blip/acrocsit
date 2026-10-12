@@ -34,6 +34,18 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
     }
   }, []);
 
+  React.useEffect(() => {
+    if (!settings.studentLoginEnabled && selectedRole === 'STUDENT') {
+      setSelectedRole('FACULTY');
+    }
+  }, [settings.studentLoginEnabled, selectedRole]);
+
+  React.useEffect(() => {
+    if (step === 'form') {
+      db.getSystemSettings().then(setSettings).catch(console.error);
+    }
+  }, [step]);
+
   const handleYearSelect = (mode: YearMode) => {
     if (!isYearConfigured(mode)) {
       setError(getYearUnavailableMessage(mode));
@@ -41,6 +53,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
     }
     setError('');
     if (mode === getYearMode()) {
+       db.getSystemSettings().then(setSettings).catch(console.error);
        setStep('form');
     } else {
        sessionStorage.setItem('acro_login_step', 'form');

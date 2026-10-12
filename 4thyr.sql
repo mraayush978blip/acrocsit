@@ -522,7 +522,7 @@ WITH CHECK (
 
 -- 8. System Settings
 CREATE POLICY "All users can read system_settings" 
-ON public.system_settings FOR SELECT TO authenticated USING (true);
+ON public.system_settings FOR SELECT TO anon, authenticated USING (true);
 
 CREATE POLICY "Admins can modify system_settings" 
 ON public.system_settings FOR ALL TO authenticated 

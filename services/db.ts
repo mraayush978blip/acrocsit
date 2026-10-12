@@ -262,6 +262,14 @@ class SupabaseService implements IDataService {
       supabase.from('profiles').update({ role: targetRole }).eq('id', authData.user.id).then();
     }
 
+    if (mappedUser.role === UserRole.STUDENT) {
+      const sysSettings = await this.getSystemSettings();
+      if (!sysSettings.studentLoginEnabled) {
+        await supabase.auth.signOut();
+        throw new Error("Student login is currently disabled by administrator.");
+      }
+    }
+
     // Record last login
     supabase.from('profiles').update({ last_login: new Date().toISOString() }).eq('id', mappedUser.uid).then();
 
@@ -1618,11 +1626,21 @@ class SupabaseService implements IDataService {
 
   async getSystemSettings(): Promise<SystemSettings> {
     try {
-      const { data, error } = await supabase.from('system_settings').select('*').eq('id', 'default').single();
+      const { data, error } = await supabase.from('system_settings').select('*');
+      if (error) {
+        console.warn("Failed to load system settings from DB, error:", error);
+      }
+
+      const rows = data || [];
+      // Support key-value schema (2nd & 3rd Year) or id-based schema (4th Year)
+      const keyRow = rows.find((r: any) => r.key === 'student_login_enabled');
+      const idRow = rows.find((r: any) => r.id === 'default') || rows[0];
+      const targetRow = keyRow || idRow;
+
       const localSlotTimings = localStorage.getItem('acro_slot_timings');
       const localLunchBreak = localStorage.getItem('acro_lunch_break');
 
-      let slotTimings = data?.slot_timings;
+      let slotTimings = targetRow?.slot_timings;
       if (!slotTimings && localSlotTimings) {
         try { slotTimings = JSON.parse(localSlotTimings); } catch (e) {}
       }
@@ -1630,7 +1648,7 @@ class SupabaseService implements IDataService {
         slotTimings = DEFAULT_SLOT_TIMINGS;
       }
 
-      let lunchBreak = data?.lunch_break;
+      let lunchBreak = targetRow?.lunch_break;
       if (!lunchBreak && localLunchBreak) {
         try { lunchBreak = JSON.parse(localLunchBreak); } catch (e) {}
       }
@@ -1638,8 +1656,23 @@ class SupabaseService implements IDataService {
         lunchBreak = DEFAULT_LUNCH_BREAK;
       }
 
+      let studentLoginEnabled = true;
+      if (targetRow) {
+        if (targetRow.student_login_enabled !== undefined && targetRow.student_login_enabled !== null) {
+          studentLoginEnabled = Boolean(targetRow.student_login_enabled);
+        } else if (targetRow.value !== undefined && targetRow.value !== null) {
+          if (typeof targetRow.value === 'boolean') {
+            studentLoginEnabled = targetRow.value;
+          } else if (typeof targetRow.value === 'string') {
+            studentLoginEnabled = targetRow.value === 'true';
+          } else {
+            studentLoginEnabled = Boolean(targetRow.value);
+          }
+        }
+      }
+
       return {
-        studentLoginEnabled: data?.student_login_enabled ?? true,
+        studentLoginEnabled,
         slotTimings,
         lunchBreak
       };
@@ -1662,20 +1695,82 @@ class SupabaseService implements IDataService {
     }
 
     try {
-      const payload: any = {
-        id: 'default',
-        student_login_enabled: settings.studentLoginEnabled,
-        slot_timings: settings.slotTimings || DEFAULT_SLOT_TIMINGS,
-        lunch_break: settings.lunchBreak || DEFAULT_LUNCH_BREAK
-      };
-      const { error } = await supabase.from('system_settings').upsert(payload);
-      if (error) {
-        // If slot_timings column does not exist yet in SQL, upsert only student_login_enabled to not fail
-        console.warn('Upsert with slot_timings failed, falling back to basic settings:', error);
-        await supabase.from('system_settings').upsert({ id: 'default', student_login_enabled: settings.studentLoginEnabled });
+      const { data: rows } = await supabase.from('system_settings').select('*').limit(5);
+      const rowList = rows || [];
+      const hasKeyColumn = rowList.length > 0 && ('key' in rowList[0]);
+      const hasIdColumn = rowList.length > 0 && ('id' in rowList[0]);
+
+      if (hasKeyColumn) {
+        // Schema 1: key-value (2nd & 3rd Year)
+        const payload: any = {
+          key: 'student_login_enabled',
+          value: settings.studentLoginEnabled
+        };
+        if (settings.slotTimings) payload.slot_timings = settings.slotTimings;
+        if (settings.lunchBreak) payload.lunch_break = settings.lunchBreak;
+        if (rowList[0] && 'updated_at' in rowList[0]) {
+          payload.updated_at = new Date().toISOString();
+        }
+
+        const { error } = await supabase.from('system_settings').upsert(payload, { onConflict: 'key' });
+        if (error) {
+          console.warn('Upsert on key-value system_settings with timings failed, falling back:', error);
+          const { error: minErr } = await supabase.from('system_settings').upsert({
+            key: 'student_login_enabled',
+            value: settings.studentLoginEnabled
+          }, { onConflict: 'key' });
+          if (minErr) {
+            const { error: updateErr } = await supabase.from('system_settings').update({
+              value: settings.studentLoginEnabled
+            }).eq('key', 'student_login_enabled');
+            if (updateErr) throw minErr;
+          }
+        }
+        return;
       }
-    } catch (err) {
-      console.warn("Failed to update system settings in DB:", err);
+
+      if (hasIdColumn || rowList.length === 0) {
+        // Schema 2: id-based (4th Year)
+        const payload: any = {
+          id: 'default',
+          student_login_enabled: settings.studentLoginEnabled,
+          slot_timings: settings.slotTimings || DEFAULT_SLOT_TIMINGS,
+          lunch_break: settings.lunchBreak || DEFAULT_LUNCH_BREAK,
+          updated_at: new Date().toISOString()
+        };
+        const { error } = await supabase.from('system_settings').upsert(payload, { onConflict: 'id' });
+        if (error) {
+          console.warn('Upsert on id-based system_settings with timings failed, falling back:', error);
+          const { error: minErr } = await supabase.from('system_settings').upsert({
+            id: 'default',
+            student_login_enabled: settings.studentLoginEnabled
+          }, { onConflict: 'id' });
+          if (minErr) {
+            const { error: kvErr } = await supabase.from('system_settings').upsert({
+              key: 'student_login_enabled',
+              value: settings.studentLoginEnabled
+            }, { onConflict: 'key' });
+            if (kvErr) throw minErr;
+          }
+        }
+        return;
+      }
+
+      // Fallback if neither schema detected directly
+      const { error: kvErr } = await supabase.from('system_settings').upsert({
+        key: 'student_login_enabled',
+        value: settings.studentLoginEnabled
+      }, { onConflict: 'key' });
+      if (kvErr) {
+        const { error: idErr } = await supabase.from('system_settings').upsert({
+          id: 'default',
+          student_login_enabled: settings.studentLoginEnabled
+        }, { onConflict: 'id' });
+        if (idErr) throw idErr;
+      }
+    } catch (err: any) {
+      console.error("Failed to update system settings in DB:", err);
+      throw err;
     }
   }
 
@@ -1716,8 +1811,17 @@ class SupabaseService implements IDataService {
       const { error } = await supabase.from('subjects').insert(SEED_SUBJECTS);
       if (error) throw error;
     }
-    const { error: ssError } = await supabase.from('system_settings').upsert([{ id: 'default', student_login_enabled: true }]);
-    if (ssError) throw ssError;
+    try {
+      const { data: ssRows } = await supabase.from('system_settings').select('*').limit(1);
+      if (!ssRows || ssRows.length === 0) {
+        const { error: ssError } = await supabase.from('system_settings').upsert([{ id: 'default', student_login_enabled: true }]);
+        if (ssError) {
+          await supabase.from('system_settings').upsert([{ key: 'student_login_enabled', value: true }]);
+        }
+      }
+    } catch (e) {
+      console.warn("System settings seed skipped:", e);
+    }
   }
 
   async getRawProfile(userId: string): Promise<any> {
@@ -1946,6 +2050,12 @@ class MockService implements IDataService {
     const users = this.load('ams_users', SEED_USERS) as User[];
     const user = users.find(u => u.email.toLowerCase() === normalizedEmail);
     if (user && (!(user as any).password || (user as any).password === pass)) {
+      if (user.role === UserRole.STUDENT) {
+        const sysSettings = await this.getSystemSettings();
+        if (!sysSettings.studentLoginEnabled) {
+          throw new Error("Student login is currently disabled by administrator.");
+        }
+      }
       user.lastLogin = new Date().toISOString();
       this.save('ams_users', users);
       localStorage.setItem('ams_current_user', JSON.stringify(user));
