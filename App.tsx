@@ -135,14 +135,23 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    let isMounted = true;
+    const timeout = setTimeout(() => {
+      if (isMounted) {
+        console.warn("Auth check timed out, clearing loading state");
+        setLoading(false);
+      }
+    }, 2000);
+
     const checkUser = async () => {
       try {
         const u = await db.getCurrentUser();
-        setUser(u);
+        if (isMounted) setUser(u);
       } catch (e) {
         console.error("Auth check failed", e);
       } finally {
-        setLoading(false);
+        clearTimeout(timeout);
+        if (isMounted) setLoading(false);
       }
     };
     checkUser();
@@ -150,16 +159,18 @@ const App: React.FC = () => {
     // Keep auth state in sync with token refresh or sign-out
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_OUT') {
-        setUser(null);
+        if (isMounted) setUser(null);
       } else if (event === 'TOKEN_REFRESHED' || event === 'SIGNED_IN') {
         if (session?.user) {
           const u = await db.getCurrentUser();
-          setUser(u);
+          if (isMounted) setUser(u);
         }
       }
     });
 
     return () => {
+      isMounted = false;
+      clearTimeout(timeout);
       subscription.unsubscribe();
     };
   }, []);

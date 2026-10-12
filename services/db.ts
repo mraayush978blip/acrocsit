@@ -283,34 +283,50 @@ class SupabaseService implements IDataService {
   }
 
   async getCurrentUser(): Promise<User | null> {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.user) return null;
+    try {
+      const fetchUser = async (): Promise<User | null> => {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.user) return null;
 
-    const normalizedEmail = session.user.email?.toLowerCase() || '';
-    const ELEVATED_ROLES: Record<string, UserRole> = {
-      'developerishere@gmail.com': UserRole.DEVELOPER,
-      'hod@acropolis.in': UserRole.ADMIN,
-      'acro472007@acropolis.in': UserRole.ADMIN
-    };
-    const targetRole = ELEVATED_ROLES[normalizedEmail];
+        const normalizedEmail = session.user.email?.toLowerCase() || '';
+        const ELEVATED_ROLES: Record<string, UserRole> = {
+          'developerishere@gmail.com': UserRole.DEVELOPER,
+          'hod@acropolis.in': UserRole.ADMIN,
+          'acro472007@acropolis.in': UserRole.ADMIN
+        };
+        const targetRole = ELEVATED_ROLES[normalizedEmail];
 
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', session.user.id)
-      .single();
+        const { data: profile, error } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', session.user.id)
+          .maybeSingle();
 
-    if (!profile) return null;
+        if (error || !profile) return null;
 
-    const mappedUser = this.mapProfile(profile);
+        const mappedUser = this.mapProfile(profile);
 
-    // Safety check: If they are elevated but the profile has the wrong role, override it.
-    if (targetRole && mappedUser.role !== targetRole) {
-      mappedUser.role = targetRole;
-      supabase.from('profiles').update({ role: targetRole }).eq('id', session.user.id).then();
+        // Safety check: If they are elevated but the profile has the wrong role, override it.
+        if (targetRole && mappedUser.role !== targetRole) {
+          mappedUser.role = targetRole;
+          supabase.from('profiles').update({ role: targetRole }).eq('id', session.user.id).then();
+        }
+
+        return mappedUser;
+      };
+
+      const timeoutPromise = new Promise<null>((resolve) =>
+        setTimeout(() => {
+          console.warn("getCurrentUser timed out after 2000ms");
+          resolve(null);
+        }, 2000)
+      );
+
+      return await Promise.race([fetchUser(), timeoutPromise]);
+    } catch (err) {
+      console.error("getCurrentUser error:", err);
+      return null;
     }
-
-    return mappedUser;
   }
 
   async changePassword(currentPass: string, newPass: string): Promise<void> {
