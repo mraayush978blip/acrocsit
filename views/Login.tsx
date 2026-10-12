@@ -108,6 +108,10 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
         if (user.role !== 'FACULTY') {
           throw new Error("This account is not a Faculty/Coordinator account.");
         }
+        const coords = await db.getCoordinatorsByFaculty(user.uid);
+        if (!coords || coords.length === 0) {
+          throw new Error(`This faculty account is not assigned as a Class Coordinator in ${getYearDisplayName(yearMode)}. Please sign in as a Faculty Account, or switch to the year where you are assigned as coordinator.`);
+        }
         sessionStorage.setItem('login_intent', 'COORDINATOR');
       } else {
         sessionStorage.removeItem('login_intent');

@@ -71,6 +71,7 @@ export const getYearMode = (): YearMode => {
 };
 
 export const setYearMode = (mode: YearMode) => {
+    sessionStorage.removeItem('login_intent');
     localStorage.setItem('acro_year_mode', mode);
     window.location.reload(); // Reload to re-initialise clients with correct credentials
 };

@@ -302,25 +302,29 @@ const App: React.FC = () => {
 
         <Route path="/faculty/*" element={
           <ProtectedRoute user={user} allowedRoles={[UserRole.FACULTY]}>
-            <DashboardLayout title="Faculty Dashboard">
-              <Routes>
-                <Route path="mark/:branchId/:subjectId" element={<FacultyDashboard user={user!} />} />
-                <Route path="mark/:branchId" element={<FacultyDashboard user={user!} />} />
-                <Route path="mark" element={<FacultyDashboard user={user!} />} />
-                <Route path="history/:branchId/:subjectId" element={<FacultyDashboard user={user!} />} />
-                <Route path="history/:branchId" element={<FacultyDashboard user={user!} />} />
-                <Route path="history" element={<FacultyDashboard user={user!} />} />
-                <Route path="marks/:branchId/:subjectId" element={<FacultyDashboard user={user!} />} />
-                <Route path="marks/:branchId" element={<FacultyDashboard user={user!} />} />
-                <Route path="marks" element={<FacultyDashboard user={user!} />} />
-                <Route path="coordinator" element={<FacultyDashboard user={user!} />} />
-                <Route path="notifications" element={<NotificationsPage user={user!} />} />
-                <Route path="recycle-bin" element={<RecycleBin branchId="ALL" metaData={{}} user={user!} />} />
-                <Route path="legal" element={<LegalView />} />
-                <Route path="report" element={<BugReport />} />
-                <Route path="*" element={<Navigate to="/faculty/mark" replace />} />
-              </Routes>
-            </DashboardLayout>
+            {sessionStorage.getItem('login_intent') === 'COORDINATOR' ? (
+              <Navigate to="/coordinator" replace />
+            ) : (
+              <DashboardLayout title="Faculty Dashboard">
+                <Routes>
+                  <Route path="mark/:branchId/:subjectId" element={<FacultyDashboard user={user!} />} />
+                  <Route path="mark/:branchId" element={<FacultyDashboard user={user!} />} />
+                  <Route path="mark" element={<FacultyDashboard user={user!} />} />
+                  <Route path="history/:branchId/:subjectId" element={<FacultyDashboard user={user!} />} />
+                  <Route path="history/:branchId" element={<FacultyDashboard user={user!} />} />
+                  <Route path="history" element={<FacultyDashboard user={user!} />} />
+                  <Route path="marks/:branchId/:subjectId" element={<FacultyDashboard user={user!} />} />
+                  <Route path="marks/:branchId" element={<FacultyDashboard user={user!} />} />
+                  <Route path="marks" element={<FacultyDashboard user={user!} />} />
+                  <Route path="coordinator" element={<FacultyDashboard user={user!} />} />
+                  <Route path="notifications" element={<NotificationsPage user={user!} />} />
+                  <Route path="recycle-bin" element={<RecycleBin branchId="ALL" metaData={{}} user={user!} />} />
+                  <Route path="legal" element={<LegalView />} />
+                  <Route path="report" element={<BugReport />} />
+                  <Route path="*" element={<Navigate to="/faculty/mark" replace />} />
+                </Routes>
+              </DashboardLayout>
+            )}
           </ProtectedRoute>
         } />
 
