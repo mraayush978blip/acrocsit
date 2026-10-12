@@ -1421,18 +1421,24 @@ class SupabaseService implements IDataService {
   }
 
   async deleteAttendanceForOverwrite(date: string, branchId: string, slot: number): Promise<void> {
-    // Move to Recycle Bin before deleting
+    // Move to Recycle Bin before deleting (exclude sub_extra so event attendance is preserved)
     const { data: records } = await supabase.from('attendance')
         .select('*')
         .eq('date', date)
         .eq('branch_id', branchId)
-        .eq('lecture_slot', slot);
+        .eq('lecture_slot', slot)
+        .neq('subject_id', 'sub_extra');
     
     if (records && records.length > 0) {
         await supabase.from('deleted_attendance').insert(records);
     }
 
-    const { error } = await supabase.from('attendance').delete().eq('date', date).eq('branch_id', branchId).eq('lecture_slot', slot);
+    const { error } = await supabase.from('attendance')
+        .delete()
+        .eq('date', date)
+        .eq('branch_id', branchId)
+        .eq('lecture_slot', slot)
+        .neq('subject_id', 'sub_extra');
     if (error) throw error;
     
     await this.logAudit('DELETE_FOR_OVERWRITE', { date, branchId, slot, count: records?.length || 0 });
@@ -1440,12 +1446,13 @@ class SupabaseService implements IDataService {
 
   async shiftAttendanceSlot(date: string, branchId: string, fromSlot: number, toSlot: number): Promise<number> {
     if (fromSlot === toSlot) return 0;
-    // 1. Fetch records in fromSlot
+    // 1. Fetch records in fromSlot (exclude sub_extra so duty attendance stays in the original slot)
     const { data: records, error: fetchErr } = await supabase.from('attendance')
         .select('*')
         .eq('date', date)
         .eq('branch_id', branchId)
-        .eq('lecture_slot', fromSlot);
+        .eq('lecture_slot', fromSlot)
+        .neq('subject_id', 'sub_extra');
     if (fetchErr) throw fetchErr;
     if (!records || records.length === 0) return 0;
 
@@ -2328,7 +2335,7 @@ class MockService implements IDataService {
 
   async deleteAttendanceForOverwrite(date: string, branchId: string, slot: number) {
     let all = this.load('ams_attendance', []) as AttendanceRecord[];
-    all = all.filter(a => !(a.date === date && a.branchId === branchId && a.lectureSlot === slot));
+    all = all.filter(a => !(a.date === date && a.branchId === branchId && a.lectureSlot === slot && a.subjectId !== 'sub_extra'));
     this.save('ams_attendance', all);
   }
 
@@ -2338,12 +2345,9 @@ class MockService implements IDataService {
     let count = 0;
     const now = Date.now();
     const updated = all.map(a => {
-      if (a.date === date && a.branchId === branchId && (a.lectureSlot || 1) === fromSlot) {
+      if (a.date === date && a.branchId === branchId && (a.lectureSlot || 1) === fromSlot && a.subjectId !== 'sub_extra') {
         count++;
         let newId = `${a.date}_${a.studentId}_L${toSlot}`;
-        if (a.subjectId === 'sub_extra' || (a.id && a.id.startsWith('extra_'))) {
-          newId = `extra_${a.branchId}_${a.date}_S${toSlot}_${a.studentId}`;
-        }
         return {
           ...a,
           id: newId,
