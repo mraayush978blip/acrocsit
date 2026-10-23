@@ -49,6 +49,7 @@ interface IDataService {
   resetFacultyPassword: (uid: string, newPass: string) => Promise<void>;
   getAssignments: (facultyId?: string) => Promise<FacultyAssignment[]>;
   assignFaculty: (data: Omit<FacultyAssignment, 'id'>) => Promise<void>;
+  bulkAssignFaculty?: (assignments: any[]) => Promise<void>;
   removeAssignment: (id: string) => Promise<void>;
 
   getCoordinators: () => Promise<CoordinatorAssignment[]>;
@@ -273,21 +274,52 @@ class SupabaseService implements IDataService {
     // Record last login
     supabase.from('profiles').update({ last_login: new Date().toISOString() }).eq('id', mappedUser.uid).then();
 
+    try {
+      localStorage.setItem('ams_current_user', JSON.stringify(mappedUser));
+    } catch (e) {
+      console.warn("Could not save user to localStorage", e);
+    }
+
     return mappedUser;
   }
 
   async logout(): Promise<void> {
-    // Clear internal memory cache
+    // Clear internal memory cache and localStorage
     this._cache = {};
+    try {
+      localStorage.removeItem('ams_current_user');
+    } catch (e) {}
     await supabase.auth.signOut();
   }
 
   async getCurrentUser(): Promise<User | null> {
     try {
-      const fetchUser = async (): Promise<User | null> => {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session?.user) return null;
+      let { data: { session }, error: sessionError } = await supabase.auth.getSession();
 
+      // If no active session or error, attempt a silent refresh before giving up
+      if (sessionError || !session?.user) {
+        try {
+          const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
+          if (!refreshError && refreshData?.session?.user) {
+            session = refreshData.session;
+          }
+        } catch (e) {
+          // Silent refresh failed
+        }
+      }
+
+      if (!session?.user) {
+        // Return cached user if present to prevent unauthenticated flicker on transient background tab stalls
+        const cached = localStorage.getItem('ams_current_user');
+        if (cached) {
+          try {
+            return JSON.parse(cached);
+          } catch {}
+        }
+        return null;
+      }
+
+      const fetchProfile = async (): Promise<User | null> => {
         const normalizedEmail = session.user.email?.toLowerCase() || '';
         const ELEVATED_ROLES: Record<string, UserRole> = {
           'developerishere@gmail.com': UserRole.DEVELOPER,
@@ -302,7 +334,17 @@ class SupabaseService implements IDataService {
           .eq('id', session.user.id)
           .maybeSingle();
 
-        if (error || !profile) return null;
+        if (error || !profile) {
+          // If profile fetch blipped but user has valid session, fall back to cached user
+          const cached = localStorage.getItem('ams_current_user');
+          if (cached) {
+            try {
+              const u = JSON.parse(cached);
+              if (u.uid === session.user.id) return u;
+            } catch {}
+          }
+          return null;
+        }
 
         const mappedUser = this.mapProfile(profile);
 
@@ -312,20 +354,32 @@ class SupabaseService implements IDataService {
           supabase.from('profiles').update({ role: targetRole }).eq('id', session.user.id).then();
         }
 
+        try {
+          localStorage.setItem('ams_current_user', JSON.stringify(mappedUser));
+        } catch (e) {}
+
         return mappedUser;
       };
 
-      const timeoutPromise = new Promise<null>((resolve) =>
+      const timeoutPromise = new Promise<User | null>((resolve) =>
         setTimeout(() => {
-          console.warn("getCurrentUser timed out after 2000ms");
+          console.warn("getCurrentUser fetchProfile slow, falling back to cached user if available");
+          const cached = localStorage.getItem('ams_current_user');
+          if (cached) {
+            try {
+              const u = JSON.parse(cached);
+              if (u.uid === session.user.id) return resolve(u);
+            } catch {}
+          }
           resolve(null);
-        }, 2000)
+        }, 8000)
       );
 
-      return await Promise.race([fetchUser(), timeoutPromise]);
+      return await Promise.race([fetchProfile(), timeoutPromise]);
     } catch (err) {
       console.error("getCurrentUser error:", err);
-      return null;
+      const cached = localStorage.getItem('ams_current_user');
+      return cached ? JSON.parse(cached) : null;
     }
   }
 
@@ -668,23 +722,77 @@ class SupabaseService implements IDataService {
   }
 
   async createStudent(data: Partial<User>): Promise<void> {
-    const enrollmentId = data.studentData?.enrollmentId;
+    const enrollmentId = data.studentData?.enrollmentId?.trim()?.toUpperCase();
     if (!enrollmentId) throw new Error("Enrollment ID required");
     const email = `${enrollmentId.toLowerCase()}@acropolis.in`;
     const password = data.studentData?.mobileNo || enrollmentId;
 
+    // Check if student already exists in profiles
+    const { data: existingProf } = await supabase
+      .from('profiles')
+      .select('id, enrollment_id')
+      .ilike('enrollment_id', enrollmentId)
+      .maybeSingle();
+
+    if (existingProf) {
+      // Already registered! Update existing profile
+      const { error: upError } = await supabase.from('profiles').update({
+        display_name: data.displayName,
+        branch_id: data.studentData?.branchId,
+        batch_id: data.studentData?.batchId,
+        roll_no: data.studentData?.rollNo,
+        mobile_no: data.studentData?.mobileNo
+      }).eq('id', existingProf.id);
+
+      if (upError) throw upError;
+
+      // Update whitelist as well
+      await supabase.from('whitelist').upsert([{ email, role: UserRole.STUDENT }]);
+
+      if (data.studentData?.branchId && data.studentData?.batchId) {
+        await this.syncLateStudentAttendance(existingProf.id, data.studentData.branchId, data.studentData.batchId);
+      }
+      this._invalidate('students_*');
+      return;
+    }
+
     const { error: wlError } = await supabase.from('whitelist').upsert([{ email, role: UserRole.STUDENT }]);
     if (wlError) throw wlError;
 
-    const { data: authData, error } = await authClient.auth.signUp({
+    const { data: authData, error: authError } = await authClient.auth.signUp({
       email,
       password,
       options: { data: { display_name: data.displayName, role: UserRole.STUDENT } }
     });
-    if (error) throw error;
+
+    if (authError) {
+      // Check if user is already in profiles by email
+      const { data: profByEmail } = await supabase
+        .from('profiles')
+        .select('id')
+        .ilike('email', email)
+        .maybeSingle();
+      if (profByEmail) {
+        await supabase.from('profiles').update({
+          display_name: data.displayName,
+          branch_id: data.studentData?.branchId,
+          batch_id: data.studentData?.batchId,
+          enrollment_id: enrollmentId,
+          roll_no: data.studentData?.rollNo,
+          mobile_no: data.studentData?.mobileNo
+        }).eq('id', profByEmail.id);
+        if (data.studentData?.branchId && data.studentData?.batchId) {
+          await this.syncLateStudentAttendance(profByEmail.id, data.studentData.branchId, data.studentData.batchId);
+        }
+        this._invalidate('students_*');
+        return;
+      }
+      throw authError;
+    }
+
     if (!authData.user) throw new Error("User creation failed");
 
-    const { error: profError } = await supabase.from('profiles').insert([{
+    const { error: profError } = await supabase.from('profiles').upsert([{
       id: authData.user.id,
       email,
       display_name: data.displayName,
@@ -879,40 +987,140 @@ class SupabaseService implements IDataService {
     let success = 0;
     let failed = 0;
     const errors: string[] = [];
-    const branchIdsToReindex = new Set<string>();
+    const branchIdsToSync = new Set<string>();
 
     const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
+
+    // Fetch existing student profiles to prevent duplicate auth sign-ups and avoid rate-limits
+    const { data: existingProfiles } = await supabase
+      .from('profiles')
+      .select('id, enrollment_id, email')
+      .eq('role', UserRole.STUDENT);
+
+    const existingByEnroll = new Map<string, any>();
+    const existingByEmail = new Map<string, any>();
+    (existingProfiles || []).forEach(p => {
+      if (p.enrollment_id) existingByEnroll.set(p.enrollment_id.toLowerCase().trim(), p);
+      if (p.email) existingByEmail.set(p.email.toLowerCase().trim(), p);
+    });
 
     let count = 0;
     for (const s of students) {
       count++;
-      if (s.studentData?.branchId) branchIdsToReindex.add(s.studentData.branchId);
-      let retries = 5;
-      let added = false;
-      while (retries > 0 && !added) {
+      const branchId = s.studentData?.branchId;
+      if (branchId) branchIdsToSync.add(branchId);
+
+      const enroll = (s.studentData?.enrollmentId || '').trim().toUpperCase();
+      const enrollLower = enroll.toLowerCase();
+      const email = `${enrollLower}@acropolis.in`;
+      const pass = s.studentData?.mobileNo || enroll;
+      const existing = existingByEnroll.get(enrollLower) || existingByEmail.get(email);
+
+      let handled = false;
+      let retries = 3;
+
+      while (retries > 0 && !handled) {
         try {
-          await this.createStudent(s);
-          success++;
-          added = true;
-          await delay(500);
+          if (existing) {
+            // Already registered! Update existing profile without calling auth.signUp
+            await supabase.from('whitelist').upsert([{ email, role: UserRole.STUDENT }]);
+            const { error: upErr } = await supabase.from('profiles').update({
+              display_name: s.displayName,
+              branch_id: s.studentData?.branchId,
+              batch_id: s.studentData?.batchId,
+              enrollment_id: enroll,
+              roll_no: s.studentData?.rollNo || '',
+              mobile_no: s.studentData?.mobileNo || ''
+            }).eq('id', existing.id);
+
+            if (upErr) throw upErr;
+            success++;
+            handled = true;
+          } else {
+            // New student - register auth + profile
+            await supabase.from('whitelist').upsert([{ email, role: UserRole.STUDENT }]);
+            const { data: authData, error: authErr } = await authClient.auth.signUp({
+              email,
+              password: pass,
+              options: { data: { display_name: s.displayName, role: UserRole.STUDENT } }
+            });
+
+            if (authErr) {
+              if (authErr.message?.toLowerCase().includes('already registered')) {
+                // If user is already registered in auth, update their profile
+                const { data: prof } = await supabase.from('profiles').select('id').ilike('email', email).maybeSingle();
+                if (prof) {
+                  await supabase.from('profiles').update({
+                    display_name: s.displayName,
+                    branch_id: s.studentData?.branchId,
+                    batch_id: s.studentData?.batchId,
+                    enrollment_id: enroll,
+                    roll_no: s.studentData?.rollNo || '',
+                    mobile_no: s.studentData?.mobileNo || ''
+                  }).eq('id', prof.id);
+                  existingByEnroll.set(enrollLower, prof);
+                  success++;
+                  handled = true;
+                  break;
+                }
+              }
+              throw authErr;
+            }
+
+            if (!authData?.user) throw new Error("User creation failed");
+
+            const { error: profErr } = await supabase.from('profiles').upsert([{
+              id: authData.user.id,
+              email,
+              display_name: s.displayName,
+              role: UserRole.STUDENT,
+              branch_id: s.studentData?.branchId,
+              batch_id: s.studentData?.batchId,
+              enrollment_id: enroll,
+              roll_no: s.studentData?.rollNo || '',
+              mobile_no: s.studentData?.mobileNo || ''
+            }]);
+
+            if (profErr) throw profErr;
+
+            existingByEnroll.set(enrollLower, { id: authData.user.id, enrollment_id: enroll, email });
+            success++;
+            handled = true;
+            // Short throttle for new signups to protect against rate-limit
+            await delay(250);
+          }
         } catch (e: any) {
-          if (e.status === 429 || e.message?.includes('rate limit')) {
+          if (e.status === 429 || e.message?.toLowerCase().includes('rate limit')) {
             retries--;
-            if (retries > 0) await delay(3000);
-            else { failed++; errors.push(`${s.displayName}: Rate limit exceeded.`); }
+            if (retries > 0) {
+              await delay(2500);
+            } else {
+              failed++;
+              errors.push(`${s.displayName || enroll}: Rate limit exceeded.`);
+              break;
+            }
           } else {
             failed++;
-            errors.push(`${s.displayName}: ${e.message}`);
+            errors.push(`${s.displayName || enroll}: ${e.message}`);
             break;
           }
         }
       }
+
       if (onProgress) onProgress(count, students.length);
     }
 
-    for (const bid of Array.from(branchIdsToReindex)) {
-      await this.reindexBranchStudents(bid);
+    // Sync missing attendance once for affected branches in bulk (100x faster than per-student!)
+    for (const bid of Array.from(branchIdsToSync)) {
+      try {
+        await this.syncMissingAttendanceForBranch(bid);
+        await this.reindexBranchStudents(bid);
+      } catch (err) {
+        console.warn("Post-import attendance sync warning:", err);
+      }
     }
+
+    this._invalidate('students_*');
     return { success, failed, errors };
   }
 
@@ -943,21 +1151,58 @@ class SupabaseService implements IDataService {
 
   async createFaculty(data: Partial<User>, password?: string): Promise<void> {
     if (!data.email) throw new Error("Email required");
+    const email = data.email.trim().toLowerCase();
     const pass = password || "password123";
 
-    const { error: wlError } = await supabase.from('whitelist').upsert([{ email: data.email, role: UserRole.FACULTY }]);
-    if (wlError) throw wlError;
+    // 1. Check if profile already exists
+    const { data: existingProf } = await supabase
+      .from('profiles')
+      .select('id, email, display_name, roll_no')
+      .ilike('email', email)
+      .maybeSingle();
+
+    if (existingProf) {
+      await supabase.from('whitelist').upsert([{ email, role: UserRole.FACULTY }]);
+      const { error: upErr } = await supabase.from('profiles').update({
+        display_name: data.displayName || existingProf.display_name,
+        roll_no: data.facultyData?.serialNo || existingProf.roll_no,
+        role: UserRole.FACULTY
+      }).eq('id', existingProf.id);
+
+      if (upErr) throw upErr;
+      this._invalidate('meta_faculty');
+      return;
+    }
+
+    // 2. New faculty registration
+    await supabase.from('whitelist').upsert([{ email, role: UserRole.FACULTY }]);
     const { data: authData, error } = await authClient.auth.signUp({
-      email: data.email,
+      email,
       password: pass,
       options: { data: { display_name: data.displayName, role: UserRole.FACULTY } }
     });
-    if (error) throw error;
-    if (!authData.user) throw new Error("User creation failed");
 
-    const { error: profError } = await supabase.from('profiles').insert([{
+    if (error) {
+      if (error.message?.toLowerCase().includes('already registered')) {
+        const { data: prof } = await supabase.from('profiles').select('id').ilike('email', email).maybeSingle();
+        if (prof) {
+          await supabase.from('profiles').update({
+            display_name: data.displayName,
+            roll_no: data.facultyData?.serialNo,
+            role: UserRole.FACULTY
+          }).eq('id', prof.id);
+          this._invalidate('meta_faculty');
+          return;
+        }
+      }
+      throw error;
+    }
+
+    if (!authData?.user) throw new Error("User creation failed");
+
+    const { error: profError } = await supabase.from('profiles').upsert([{
       id: authData.user.id,
-      email: data.email,
+      email,
       display_name: data.displayName,
       role: UserRole.FACULTY,
       roll_no: data.facultyData?.serialNo
@@ -971,32 +1216,106 @@ class SupabaseService implements IDataService {
     const errors: string[] = [];
     const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
+    // Pre-fetch all existing profiles to avoid auth.signUp calls for existing members
+    const { data: existingProfiles } = await supabase
+      .from('profiles')
+      .select('id, email, display_name, roll_no');
+
+    const existingByEmail = new Map<string, any>();
+    (existingProfiles || []).forEach(p => {
+      if (p.email) existingByEmail.set(p.email.toLowerCase().trim(), p);
+    });
+
     for (const fac of facultyList) {
+      const email = (fac.data.email || '').trim().toLowerCase();
+      if (!email) {
+        failed++;
+        errors.push(`Missing email for faculty: ${fac.data.displayName || 'Unknown'}`);
+        continue;
+      }
+
+      const pass = fac.password || "password123";
+      const existing = existingByEmail.get(email);
+      let handled = false;
       let retries = 3;
-      let added = false;
-      while (retries > 0 && !added) {
+
+      while (retries > 0 && !handled) {
         try {
-          await this.createFaculty(fac.data, fac.password);
-          success++;
-          added = true;
-          await delay(300);
+          if (existing) {
+            // Already registered - update profile directly without auth rate limit
+            await supabase.from('whitelist').upsert([{ email, role: UserRole.FACULTY }]);
+            const { error: upErr } = await supabase.from('profiles').update({
+              display_name: fac.data.displayName,
+              roll_no: fac.data.facultyData?.serialNo || existing.roll_no,
+              role: UserRole.FACULTY
+            }).eq('id', existing.id);
+
+            if (upErr) throw upErr;
+            success++;
+            handled = true;
+          } else {
+            // New faculty - create whitelist and auth
+            await supabase.from('whitelist').upsert([{ email, role: UserRole.FACULTY }]);
+            const { data: authData, error: authErr } = await authClient.auth.signUp({
+              email,
+              password: pass,
+              options: { data: { display_name: fac.data.displayName, role: UserRole.FACULTY } }
+            });
+
+            if (authErr) {
+              if (authErr.message?.toLowerCase().includes('already registered')) {
+                const { data: prof } = await supabase.from('profiles').select('id').ilike('email', email).maybeSingle();
+                if (prof) {
+                  await supabase.from('profiles').update({
+                    display_name: fac.data.displayName,
+                    roll_no: fac.data.facultyData?.serialNo,
+                    role: UserRole.FACULTY
+                  }).eq('id', prof.id);
+                  existingByEmail.set(email, prof);
+                  success++;
+                  handled = true;
+                  break;
+                }
+              }
+              throw authErr;
+            }
+
+            if (!authData?.user) throw new Error("User creation failed");
+
+            const { error: profErr } = await supabase.from('profiles').upsert([{
+              id: authData.user.id,
+              email,
+              display_name: fac.data.displayName,
+              role: UserRole.FACULTY,
+              roll_no: fac.data.facultyData?.serialNo
+            }]);
+
+            if (profErr) throw profErr;
+            existingByEmail.set(email, { id: authData.user.id, email });
+            success++;
+            handled = true;
+            await delay(250);
+          }
         } catch (e: any) {
-          if (e.status === 429 || e.message?.includes('rate limit') || e.message?.includes('Too Many Requests')) {
+          if (e.status === 429 || e.message?.toLowerCase().includes('rate limit') || e.message?.toLowerCase().includes('too many requests')) {
             retries--;
             if (retries > 0) {
-              await delay(2000);
+              await delay(2500);
             } else {
               failed++;
-              errors.push(`${fac.data.email}: Rate limit exceeded.`);
+              errors.push(`${fac.data.displayName || email}: Rate limit exceeded.`);
+              break;
             }
           } else {
             failed++;
-            errors.push(`${fac.data.email}: ${e.message}`);
+            errors.push(`${fac.data.displayName || email}: ${e.message}`);
             break;
           }
         }
       }
     }
+
+    this._invalidate('meta_faculty');
     return { success, failed, errors };
   }
 
@@ -1102,6 +1421,19 @@ class SupabaseService implements IDataService {
       subject_id: data.subjectId
     };
     const { error } = await supabase.from('assignments').upsert([obj]);
+    if (error) throw error;
+    this._invalidate('meta_assignments_*');
+  }
+  async bulkAssignFaculty(assignments: any[]): Promise<void> {
+    if (assignments.length === 0) return;
+    const rows = assignments.map((data, idx) => ({
+      id: data.id || `assign_${Date.now()}_${idx}`,
+      faculty_id: data.facultyId,
+      branch_id: data.branchId,
+      batch_id: data.batchId,
+      subject_id: data.subjectId
+    }));
+    const { error } = await supabase.from('assignments').upsert(rows);
     if (error) throw error;
     this._invalidate('meta_assignments_*');
   }
@@ -2194,21 +2526,31 @@ class MockService implements IDataService {
 
   async importStudents(students: Partial<User>[]): Promise<{ success: number; failed: number; errors: string[] }> {
     const users = this.load('ams_users', SEED_USERS) as User[];
-    const existingEmails = new Set(users.map(u => u.email.toLowerCase()));
-    const existingEnrollments = new Set(users.map(u => u.studentData?.enrollmentId?.toLowerCase()).filter(Boolean));
+    const existingEmails = new Set(users.map(u => (u.email || '').toLowerCase()));
+    const existingEnrollments = new Set(users.map(u => (u.studentData?.enrollmentId || '').toLowerCase()).filter(Boolean));
     let success = 0;
     let failed = 0;
     const errors: string[] = [];
 
     students.forEach((s, i) => {
-      const email = s.email?.toLowerCase();
-      const enroll = s.studentData?.enrollmentId?.toLowerCase();
+      const enroll = (s.studentData?.enrollmentId || '').trim();
+      const email = (s.email || (enroll ? `${enroll.toLowerCase()}@acropolis.in` : '')).toLowerCase();
 
-      if (email && !existingEmails.has(email) && (!enroll || !existingEnrollments.has(enroll))) {
-        users.push({ ...s, uid: `stu_${Date.now()}_${i}`, role: UserRole.STUDENT, password: enroll || 'password123' } as User);
+      if (email && !existingEmails.has(email) && (!enroll || !existingEnrollments.has(enroll.toLowerCase()))) {
+        users.push({ ...s, email, uid: `stu_${Date.now()}_${i}`, role: UserRole.STUDENT, password: enroll || 'password123' } as User);
         existingEmails.add(email);
-        if (enroll) existingEnrollments.add(enroll);
+        if (enroll) existingEnrollments.add(enroll.toLowerCase());
         success++;
+      } else if (enroll && existingEnrollments.has(enroll.toLowerCase())) {
+        // Update existing mock student
+        const idx = users.findIndex(u => (u.studentData?.enrollmentId || '').toLowerCase() === enroll.toLowerCase());
+        if (idx >= 0) {
+          users[idx] = { ...users[idx], displayName: s.displayName || users[idx].displayName, studentData: { ...users[idx].studentData, ...s.studentData } as any };
+          success++;
+        } else {
+          failed++;
+          errors.push(`Duplicate: ${s.displayName} (${enroll})`);
+        }
       } else {
         failed++;
         errors.push(`Duplicate: ${s.displayName} (${enroll})`);
@@ -2268,11 +2610,36 @@ class MockService implements IDataService {
   }
 
   async importFaculty(facultyList: { data: Partial<User>, password?: string }[]): Promise<{ success: number, failed: number, errors: string[] }> {
+    const users = this.load('ams_users', SEED_USERS) as User[];
+    const existingEmails = new Set(users.map(u => (u.email || '').toLowerCase()));
     let success = 0, failed = 0; const errors: string[] = [];
     for (const fac of facultyList) {
-      try { await this.createFaculty(fac.data, fac.password); success++; }
-      catch (e: any) { failed++; errors.push(`${fac.data.email}: ${e.message}`); }
+      const email = (fac.data.email || '').toLowerCase().trim();
+      if (!email) { failed++; errors.push("Missing email"); continue; }
+      if (existingEmails.has(email)) {
+        const idx = users.findIndex(u => (u.email || '').toLowerCase() === email);
+        if (idx >= 0) {
+          users[idx] = {
+            ...users[idx],
+            displayName: fac.data.displayName || users[idx].displayName,
+            facultyData: { ...users[idx].facultyData, ...fac.data.facultyData }
+          };
+          success++;
+        }
+      } else {
+        users.push({
+          ...fac.data,
+          email,
+          uid: `fac_${Date.now()}_${success}`,
+          role: UserRole.FACULTY,
+          password: fac.password || 'password123',
+          facultyData: { ...fac.data.facultyData }
+        } as User);
+        existingEmails.add(email);
+        success++;
+      }
     }
+    this.save('ams_users', users);
     return { success, failed, errors };
   }
 
@@ -2308,6 +2675,21 @@ class MockService implements IDataService {
     } else {
       all.push({ ...data, id: `assign_${Date.now()}` });
     }
+    this.save('ams_assignments', all);
+  }
+  async bulkAssignFaculty(assignments: any[]) {
+    const all = this.load('ams_assignments', SEED_ASSIGNMENTS);
+    assignments.forEach((data, idx) => {
+      const existingIdx = all.findIndex((x: any) => 
+        (data.id && x.id === data.id) || 
+        (x.branchId === data.branchId && x.subjectId === data.subjectId && x.batchId === data.batchId)
+      );
+      if (existingIdx >= 0) {
+        all[existingIdx] = { ...all[existingIdx], ...data };
+      } else {
+        all.push({ ...data, id: data.id || `assign_${Date.now()}_${idx}` });
+      }
+    });
     this.save('ams_assignments', all);
   }
   async removeAssignment(id: string) {

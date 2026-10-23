@@ -101,8 +101,15 @@ const App: React.FC = () => {
     );
   }
 
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState<User | null>(() => {
+    try {
+      const cached = localStorage.getItem('ams_current_user');
+      return cached ? JSON.parse(cached) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [loading, setLoading] = useState(() => !localStorage.getItem('ams_current_user'));
   const location = useLocation();
 
   // Settings / Password Change State
@@ -134,6 +141,43 @@ const App: React.FC = () => {
     return () => window.removeEventListener('error', handleChunkError);
   }, []);
 
+  // Keep session alive when tab returns from background
+  useEffect(() => {
+    const handleVisibilityOrFocus = async () => {
+      if (document.visibilityState === 'visible') {
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session) {
+            const expiresAt = session.expires_at ? session.expires_at * 1000 : 0;
+            // If token expires in less than 5 minutes or is already expired, refresh it proactively
+            if (expiresAt && (expiresAt - Date.now() < 300000)) {
+              await supabase.auth.refreshSession();
+            }
+          } else {
+            // Background throttling might have paused authClient or lost in-memory state
+            const cached = localStorage.getItem('ams_current_user');
+            if (cached) {
+              const { data: refreshData } = await supabase.auth.refreshSession();
+              if (refreshData?.session?.user) {
+                const u = await db.getCurrentUser();
+                if (u) setUser(u);
+              }
+            }
+          }
+        } catch (e) {
+          console.warn("Visibility keep-alive check:", e);
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+    };
+  }, []);
+
   useEffect(() => {
     let isMounted = true;
     const timeout = setTimeout(() => {
@@ -141,12 +185,23 @@ const App: React.FC = () => {
         console.warn("Auth check timed out, clearing loading state");
         setLoading(false);
       }
-    }, 2000);
+    }, 6000);
 
     const checkUser = async () => {
       try {
         const u = await db.getCurrentUser();
-        if (isMounted) setUser(u);
+        if (isMounted) {
+          if (u) {
+            setUser(u);
+          } else {
+            // Only wipe user if there is strictly no Supabase session AND no cached user
+            const { data: { session } } = await supabase.auth.getSession();
+            const cachedUser = localStorage.getItem('ams_current_user');
+            if (!session && !cachedUser) {
+              setUser(null);
+            }
+          }
+        }
       } catch (e) {
         console.error("Auth check failed", e);
       } finally {
@@ -159,11 +214,13 @@ const App: React.FC = () => {
     // Keep auth state in sync with token refresh or sign-out
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_OUT') {
+        try { localStorage.removeItem('ams_current_user'); } catch (e) {}
         if (isMounted) setUser(null);
       } else if (event === 'TOKEN_REFRESHED' || event === 'SIGNED_IN') {
         if (session?.user) {
           const u = await db.getCurrentUser();
-          if (isMounted) setUser(u);
+          // Never wipe out user on token refresh blip
+          if (isMounted && u) setUser(u);
         }
       }
     });
@@ -176,12 +233,18 @@ const App: React.FC = () => {
   }, []);
 
   const handleLogin = (loggedInUser: User) => {
+    try {
+      localStorage.setItem('ams_current_user', JSON.stringify(loggedInUser));
+    } catch (e) {}
     setUser(loggedInUser);
   };
 
   const handleLogout = async () => {
-    await db.logout();
+    try {
+      localStorage.removeItem('ams_current_user');
+    } catch (e) {}
     sessionStorage.removeItem('login_intent');
+    await db.logout();
     setUser(null);
   };
 

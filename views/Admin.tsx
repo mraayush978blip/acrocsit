@@ -4,7 +4,7 @@ import { db } from '../services/db';
 import { supabase } from '../services/supabase';
 import { Branch, Batch, User, Subject, FacultyAssignment, AttendanceRecord, CoordinatorAssignment, Mark, SystemSettings, MidSemType, SlotTiming, LunchBreakConfig } from '../types';
 import { Card, Button, Input, Select, Modal, FileUploader, ExportProgressModal } from '../components/UI';
-import { Plus, Trash2, ChevronRight, Users, BookOpen, Database, Key, ArrowLeft, CheckCircle2, XCircle, Trash, Eye, EyeOff, Layers, Edit2, Calendar, Smartphone, Filter, AlertCircle, AlertTriangle, Trophy, Settings, GripVertical, FileDown, Loader2, Activity, RefreshCw, MoreVertical, Archive, Download, Clock } from 'lucide-react';
+import { Plus, Trash2, ChevronRight, Users, BookOpen, Database, Key, ArrowLeft, CheckCircle2, XCircle, Trash, Eye, EyeOff, Layers, Edit2, Calendar, Smartphone, Filter, AlertCircle, AlertTriangle, Trophy, Settings, GripVertical, FileDown, Loader2, Activity, RefreshCw, MoreVertical, Archive, Download, Clock, Zap, Copy, Check, Grid, List, Search, Sparkles } from 'lucide-react';
 import { useNavigate, useLocation, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { DEFAULT_SLOT_TIMINGS, DEFAULT_LUNCH_BREAK } from '../constants';
 
@@ -1380,39 +1380,169 @@ const StudentManagement: React.FC = () => {
   };
 
   const handleCSVUpload = async (file: File) => {
-    if (!branchId || !batchId) return;
+    if (!branchId || !batchId) {
+      alert("Please select a Branch and Batch first.");
+      return;
+    }
     setLoading(true);
     const reader = new FileReader();
     reader.onload = async (e) => {
       const text = e.target?.result as string;
-      // Handle both \n and \r\n line endings
-      const lines = text.split(/\r?\n/);
+      const cleanText = (text || '').replace(/^\uFEFF/, '').trim();
+      if (!cleanText) {
+        alert("The uploaded CSV file is empty.");
+        setLoading(false);
+        return;
+      }
+
+      // Parse lines respecting both \r\n and \n
+      const rawLines = cleanText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      if (rawLines.length === 0) {
+        alert("No readable lines found in the CSV.");
+        setLoading(false);
+        return;
+      }
+
+      // Smart delimiter and quote parser
+      const parseCSVRow = (line: string): string[] => {
+        let delim = ',';
+        if (!line.includes(',') && line.includes(';')) delim = ';';
+        else if (!line.includes(',') && line.includes('\t')) delim = '\t';
+
+        const row: string[] = [];
+        let cur = '';
+        let inQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+          const char = line[i];
+          if (char === '"') {
+            if (inQuotes && line[i + 1] === '"') {
+              cur += '"';
+              i++;
+            } else {
+              inQuotes = !inQuotes;
+            }
+          } else if (char === delim && !inQuotes) {
+            row.push(cur.trim().replace(/^"|"$/g, '').trim());
+            cur = '';
+          } else {
+            cur += char;
+          }
+        }
+        row.push(cur.trim().replace(/^"|"$/g, '').trim());
+        return row;
+      };
+
+      const parsedRows = rawLines.map(parseCSVRow).filter(r => r.length > 0 && r.some(c => c.length > 0));
+      if (parsedRows.length === 0) {
+        alert("Could not parse rows from the CSV.");
+        setLoading(false);
+        return;
+      }
+
+      // Header detection from first row
+      const firstRow = parsedRows[0].map(c => c.toLowerCase().trim());
+      let colEnroll = -1;
+      let colName = -1;
+      let colRoll = -1;
+      let colMobile = -1;
+      let hasHeader = false;
+
+      firstRow.forEach((col, idx) => {
+        if (col.includes('enroll') || col.includes('rgpv') || col.includes('scholar') || col.includes('enrol')) {
+          colEnroll = idx;
+          hasHeader = true;
+        } else if (col.includes('name') || col.includes('student')) {
+          colName = idx;
+          hasHeader = true;
+        } else if (col.includes('roll') || col.includes('sr') || col.includes('s.no') || col.includes('serial') || col === 'no') {
+          colRoll = idx;
+          hasHeader = true;
+        } else if (col.includes('mob') || col.includes('phone') || col.includes('contact') || col.includes('cell')) {
+          colMobile = idx;
+          hasHeader = true;
+        }
+      });
+
+      const startIdx = hasHeader ? 1 : 0;
+      const dataRows = parsedRows.slice(startIdx);
       const newStudents: Partial<User>[] = [];
 
-      // Determine if header exists (first line contains 'enrollment' or 'name')
-      const firstLineLower = lines[0].toLowerCase();
-      const startIndex = (firstLineLower.includes('enrollment') || firstLineLower.includes('name')) ? 1 : 0;
+      for (const parts of dataRows) {
+        if (!parts || parts.length < 2) continue;
 
-      for (let i = startIndex; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (!line) continue;
+        let enroll = '';
+        let roll = '';
+        let name = '';
+        let mobile = '';
 
-        // Split by comma but handle potential trailing commas or simple quotes
-        const parts = line.split(',').map(s => s.trim().replace(/^"(.*)"$/, '$1'));
-        let enroll, roll, name, mobile;
-
-        if (parts.length >= 4) {
-          [enroll, roll, name, mobile] = parts;
-        } else if (parts.length === 3) {
-          [enroll, name, mobile] = parts; roll = '';
+        if (colEnroll !== -1 && colName !== -1) {
+          enroll = parts[colEnroll] || '';
+          name = parts[colName] || '';
+          roll = colRoll !== -1 ? (parts[colRoll] || '') : '';
+          mobile = colMobile !== -1 ? (parts[colMobile] || '') : '';
         } else {
-          continue;
+          // Dynamic inference based on column count and data patterns
+          if (parts.length >= 4) {
+            const p0HasLetters = /[a-zA-Z]/.test(parts[0]) && parts[0].length >= 6;
+            const p1HasLetters = /[a-zA-Z]/.test(parts[1]) && parts[1].length >= 6;
+
+            if (p0HasLetters) {
+              // Enrollment, Sr No, Name, Mobile
+              enroll = parts[0];
+              roll = parts[1];
+              name = parts[2];
+              mobile = parts[3];
+            } else if (p1HasLetters) {
+              // Sr No, Enrollment, Name, Mobile
+              roll = parts[0];
+              enroll = parts[1];
+              name = parts[2];
+              mobile = parts[3];
+            } else {
+              enroll = parts[0];
+              roll = parts[1];
+              name = parts[2];
+              mobile = parts[3];
+            }
+          } else if (parts.length === 3) {
+            const p0HasLetters = /[a-zA-Z]/.test(parts[0]) && parts[0].length >= 6;
+            const p1HasLetters = /[a-zA-Z]/.test(parts[1]) && parts[1].length >= 6;
+
+            if (p0HasLetters) {
+              enroll = parts[0];
+              name = parts[1];
+              mobile = parts[2];
+            } else if (p1HasLetters) {
+              roll = parts[0];
+              enroll = parts[1];
+              name = parts[2];
+            } else {
+              enroll = parts[0];
+              name = parts[1];
+              mobile = parts[2];
+            }
+          } else if (parts.length === 2) {
+            enroll = parts[0];
+            name = parts[1];
+          }
         }
+
+        enroll = enroll.trim().toUpperCase();
+        name = name.trim();
+        roll = roll.trim();
+        mobile = mobile.trim().replace(/\D/g, '');
 
         if (enroll && name) {
           newStudents.push({
             displayName: name,
-            studentData: { branchId, batchId, enrollmentId: enroll, rollNo: roll || '', mobileNo: mobile || '' }
+            email: `${enroll.toLowerCase()}@acropolis.in`,
+            studentData: {
+              branchId,
+              batchId,
+              enrollmentId: enroll,
+              rollNo: roll || '',
+              mobileNo: mobile || ''
+            }
           });
         }
       }
@@ -1436,7 +1566,7 @@ const StudentManagement: React.FC = () => {
           setImportProgress(null);
         }
       } else {
-        alert("No valid student data found in CSV. Expected columns: Enrollment, Sr No, Name, Mobile");
+        alert("No valid student data found in CSV. Expected columns: Enrollment, Sr No, Name, Mobile (or S.No, Enrollment, Name, Mobile)");
       }
       setLoading(false);
     };
@@ -2020,19 +2150,149 @@ const FacultyManagement: React.FC = () => {
     const reader = new FileReader();
     reader.onload = async (ev) => {
       const text = ev.target?.result as string;
-      const lines = text.split('\n').filter(l => l.trim() && !l.toLowerCase().startsWith('name') && !l.toLowerCase().startsWith('s.no'));
-      const parsed = lines.map(line => {
-        const parts = line.split(',').map(s => s.trim().replace(/^"|"$/g, ''));
-        const serialNo = parts[0] || '';
-        const name = parts[1] || '';
-        const email = parts[2] || '';
-        const password = parts[3] || 'password123';
-        return { data: { displayName: name, email, facultyData: { serialNo } }, password };
-      }).filter(f => f.data.displayName && f.data.email);
-      if (parsed.length === 0) { alert('No valid faculty rows found. CSV format: S.No, Name, Email, Password'); setIsImportingFaculty(false); return; }
+      const cleanText = (text || '').replace(/^\uFEFF/, '').trim();
+      if (!cleanText) {
+        alert("The uploaded CSV file is empty.");
+        setIsImportingFaculty(false);
+        return;
+      }
+
+      // Parse lines respecting both \r\n and \n
+      const rawLines = cleanText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      if (rawLines.length === 0) {
+        alert("No readable lines found in the CSV.");
+        setIsImportingFaculty(false);
+        return;
+      }
+
+      // Smart delimiter and quote parser
+      const parseCSVRow = (line: string): string[] => {
+        let delim = ',';
+        if (!line.includes(',') && line.includes(';')) delim = ';';
+        else if (!line.includes(',') && line.includes('\t')) delim = '\t';
+
+        const row: string[] = [];
+        let cur = '';
+        let inQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+          const char = line[i];
+          if (char === '"') {
+            if (inQuotes && line[i + 1] === '"') {
+              cur += '"';
+              i++;
+            } else {
+              inQuotes = !inQuotes;
+            }
+          } else if (char === delim && !inQuotes) {
+            row.push(cur.trim().replace(/^"|"$/g, '').trim());
+            cur = '';
+          } else {
+            cur += char;
+          }
+        }
+        row.push(cur.trim().replace(/^"|"$/g, '').trim());
+        return row;
+      };
+
+      const parsedRows = rawLines.map(parseCSVRow).filter(r => r.length > 0 && r.some(c => c.length > 0));
+      if (parsedRows.length === 0) {
+        alert("Could not parse rows from the CSV.");
+        setIsImportingFaculty(false);
+        return;
+      }
+
+      // Dynamic header detection from first row
+      const firstRow = parsedRows[0].map(c => c.toLowerCase().trim());
+      let colSerial = -1;
+      let colName = -1;
+      let colEmail = -1;
+      let colPassword = -1;
+      let hasHeader = false;
+
+      firstRow.forEach((col, idx) => {
+        if (col.includes('email') || col.includes('mail') || col.includes('user')) {
+          colEmail = idx;
+          hasHeader = true;
+        } else if (col.includes('name') || col.includes('faculty') || col.includes('teacher') || col.includes('prof')) {
+          colName = idx;
+          hasHeader = true;
+        } else if (col.includes('serial') || col.includes('sr') || col.includes('s.no') || col.includes('sno') || col.includes('roll') || col === 'no') {
+          colSerial = idx;
+          hasHeader = true;
+        } else if (col.includes('pass') || col.includes('pwd')) {
+          colPassword = idx;
+          hasHeader = true;
+        }
+      });
+
+      const startIdx = hasHeader ? 1 : 0;
+      const dataRows = parsedRows.slice(startIdx);
+      const parsed: { data: Partial<User>, password?: string }[] = [];
+
+      for (const parts of dataRows) {
+        if (!parts || parts.length === 0) continue;
+
+        let serialNo = '';
+        let name = '';
+        let email = '';
+        let password = 'password123';
+
+        if (colEmail !== -1) {
+          email = parts[colEmail] || '';
+          name = colName !== -1 ? (parts[colName] || '') : '';
+          serialNo = colSerial !== -1 ? (parts[colSerial] || '') : '';
+          password = colPassword !== -1 && parts[colPassword] ? parts[colPassword] : 'password123';
+        } else {
+          // Dynamic inference based on row content: find column with '@'
+          const emailIdx = parts.findIndex(p => p.includes('@'));
+          if (emailIdx !== -1) {
+            email = parts[emailIdx];
+            const otherParts = parts.filter((_, idx) => idx !== emailIdx);
+            if (otherParts.length >= 2) {
+              if (/^\d+$/.test(otherParts[0]) || otherParts[0].length <= 4) {
+                serialNo = otherParts[0];
+                name = otherParts[1];
+              } else {
+                name = otherParts[0];
+                serialNo = otherParts[1];
+              }
+            } else if (otherParts.length === 1) {
+              name = otherParts[0];
+            }
+          } else {
+            // Default column assumption: S.No, Name, Email, Password
+            serialNo = parts[0] || '';
+            name = parts[1] || '';
+            email = parts[2] || '';
+            password = parts[3] || 'password123';
+          }
+        }
+
+        email = email.trim().toLowerCase();
+        name = name.trim();
+        serialNo = serialNo.trim();
+
+        if (email && name) {
+          parsed.push({
+            data: {
+              displayName: name,
+              email,
+              facultyData: { serialNo }
+            },
+            password
+          });
+        }
+      }
+
+      if (parsed.length === 0) {
+        alert("No valid faculty rows found. Expected columns: S.No, Name, Email, Password (or Name, Email)");
+        setIsImportingFaculty(false);
+        return;
+      }
+
       const result = await db.importFaculty(parsed);
-      alert(`Import Done:\n✅ Success: ${result.success}\n❌ Failed: ${result.failed}${result.errors.length > 0 ? '\n\nErrors:\n' + result.errors.slice(0, 5).join('\n') : ''}`);
-      loadData();
+      alert(`Faculty Import Done:\n✅ Success: ${result.success}\n❌ Failed: ${result.failed}${result.errors.length > 0 ? '\n\nErrors:\n' + result.errors.slice(0, 5).join('\n') : ''}`);
+      await loadData();
       setIsImportingFaculty(false);
     };
     reader.readAsText(file);
@@ -2053,16 +2313,41 @@ const FacultyManagement: React.FC = () => {
   const [allocFilterBranchId, setAllocFilterBranchId] = useState('');
   const [isLoadingData, setIsLoadingData] = useState(false);
 
+  // Allocation View & Matrix Grid State
+  const [allocViewMode, setAllocViewMode] = useState<'matrix' | 'classic'>('matrix');
+  const [matrixBranchId, setMatrixBranchId] = useState('');
+  const [matrixBatches, setMatrixBatches] = useState<Batch[]>([]);
+  const [matrixSearch, setMatrixSearch] = useState('');
+  const [showUnassignedOnly, setShowUnassignedOnly] = useState(false);
+  const [matrixSavingKey, setMatrixSavingKey] = useState<string | null>(null);
+  const [matrixSavedKeys, setMatrixSavedKeys] = useState<Set<string>>(new Set());
+  const [isCloneModalOpen, setIsCloneModalOpen] = useState(false);
+  const [cloneSourceBranchId, setCloneSourceBranchId] = useState('');
+  const [isCloning, setIsCloning] = useState(false);
+
   // Edit Faculty/Subject State
   const [isEditingFaculty, setIsEditingFaculty] = useState(false);
   const [editFacForm, setEditFacForm] = useState({ uid: '', name: '', email: '', serialNo: '' });
   const [isEditingSubject, setIsEditingSubject] = useState(false);
   const [editSubForm, setEditSubForm] = useState({ id: '', name: '', code: '', type: 'theory' as 'theory' | 'lab' });
 
-
   // Maps for displaying names in table
   const [classMap, setClassMap] = useState<Record<string, string>>({}); // Actually class context names
   const [batchMap, setBatchMap] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (matrixBranchId) {
+      db.getBatches(matrixBranchId).then(bts => setMatrixBatches(bts)).catch(console.error);
+    }
+  }, [matrixBranchId]);
+
+  const facultyWorkload = useMemo(() => {
+    const map = new Map<string, number>();
+    assignments.forEach(a => {
+      map.set(a.facultyId, (map.get(a.facultyId) || 0) + 1);
+    });
+    return map;
+  }, [assignments]);
 
   useEffect(() => { loadData(); }, [activeSubTab]);
 
@@ -2080,6 +2365,10 @@ const FacultyManagement: React.FC = () => {
       setFaculty(facs);
       setAssignments(assigns);
       setBranches(brs);
+      setMatrixBranchId(prev => {
+        if (prev && brs.some(b => b.id === prev)) return prev;
+        return brs.filter(b => !b.view_only)[0]?.id || brs[0]?.id || '';
+      });
       setCoordinators(coords);
 
       // Pre-fetch all batches for context efficiently
@@ -2261,6 +2550,196 @@ const FacultyManagement: React.FC = () => {
     return batchMap[batchId] || batchId;
   };
 
+  // Filtered Subjects for Matrix Grid
+  const classSubjects = useMemo(() => {
+    let list = [...subjects];
+    if (matrixSearch.trim()) {
+      const q = matrixSearch.toLowerCase();
+      list = list.filter(s => s.name.toLowerCase().includes(q) || s.code.toLowerCase().includes(q));
+    }
+    return list.sort((a, b) => {
+      const typeA = a.type === 'lab' ? 'lab' : 'theory';
+      const typeB = b.type === 'lab' ? 'lab' : 'theory';
+      if (typeA !== typeB) return typeA === 'theory' ? -1 : 1;
+      return (a.code || '').localeCompare(b.code || '');
+    });
+  }, [subjects, matrixSearch]);
+
+  // Matrix Progress Stats
+  const matrixStats = useMemo(() => {
+    let totalSlots = 0;
+    let assignedSlots = 0;
+
+    subjects.forEach(s => {
+      if (s.type === 'lab' && matrixBatches.length > 0) {
+        matrixBatches.forEach(b => {
+          totalSlots++;
+          if (assignments.some(a => a.branchId === matrixBranchId && a.subjectId === s.id && a.batchId === b.id)) {
+            assignedSlots++;
+          }
+        });
+      } else {
+        totalSlots++;
+        if (assignments.some(a => a.branchId === matrixBranchId && a.subjectId === s.id && a.batchId === 'ALL')) {
+          assignedSlots++;
+        }
+      }
+    });
+
+    const percent = totalSlots > 0 ? Math.round((assignedSlots / totalSlots) * 100) : 0;
+    return { totalSlots, assignedSlots, unassignedSlots: totalSlots - assignedSlots, percent };
+  }, [subjects, matrixBatches, assignments, matrixBranchId]);
+
+  // Auto-Save Matrix Assignment
+  const handleMatrixAssign = async (subjectId: string, batchId: string, facultyId: string) => {
+    const cellKey = `${subjectId}_${batchId}`;
+    setMatrixSavingKey(cellKey);
+    try {
+      const existing = assignments.find(a => a.branchId === matrixBranchId && a.subjectId === subjectId && a.batchId === batchId);
+      if (!facultyId) {
+        if (existing) {
+          await db.removeAssignment(existing.id);
+          setAssignments(prev => prev.filter(a => a.id !== existing.id));
+        }
+      } else {
+        const newAssign: FacultyAssignment = {
+          id: existing?.id || `assign_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+          facultyId,
+          branchId: matrixBranchId,
+          batchId,
+          subjectId
+        };
+        await db.assignFaculty(newAssign);
+        setAssignments(prev => {
+          const filtered = prev.filter(a => a.id !== newAssign.id && !(a.branchId === matrixBranchId && a.subjectId === subjectId && a.batchId === batchId));
+          return [...filtered, newAssign];
+        });
+      }
+
+      setMatrixSavedKeys(prev => new Set(prev).add(cellKey));
+      setTimeout(() => {
+        setMatrixSavedKeys(prev => {
+          const next = new Set(prev);
+          next.delete(cellKey);
+          return next;
+        });
+      }, 2200);
+    } catch (err: any) {
+      alert("Allocation failed: " + err.message);
+    } finally {
+      setMatrixSavingKey(null);
+    }
+  };
+
+  // Quick Action: Apply to all batches of this Lab
+  const handleApplyToAllBatches = async (subjectId: string, facultyId: string) => {
+    if (!facultyId || matrixBatches.length === 0) return;
+    const actionKey = `all_${subjectId}`;
+    setMatrixSavingKey(actionKey);
+    try {
+      const updates: any[] = [];
+      for (const b of matrixBatches) {
+        const existing = assignments.find(a => a.branchId === matrixBranchId && a.subjectId === subjectId && a.batchId === b.id);
+        updates.push({
+          id: existing?.id || `assign_${Date.now()}_${b.id}_${Math.random().toString(36).substr(2, 4)}`,
+          facultyId,
+          branchId: matrixBranchId,
+          batchId: b.id,
+          subjectId
+        });
+      }
+
+      if (db.bulkAssignFaculty) {
+        await db.bulkAssignFaculty(updates);
+      } else {
+        for (const u of updates) await db.assignFaculty(u);
+      }
+
+      setAssignments(prev => {
+        const ids = new Set(updates.map(u => u.id));
+        const filtered = prev.filter(a => !ids.has(a.id) && !(a.branchId === matrixBranchId && a.subjectId === subjectId));
+        return [...filtered, ...updates];
+      });
+
+      setMatrixSavedKeys(prev => {
+        const next = new Set(prev);
+        matrixBatches.forEach(b => next.add(`${subjectId}_${b.id}`));
+        return next;
+      });
+      setTimeout(() => {
+        setMatrixSavedKeys(prev => {
+          const next = new Set(prev);
+          matrixBatches.forEach(b => next.delete(`${subjectId}_${b.id}`));
+          return next;
+        });
+      }, 2200);
+    } catch (err: any) {
+      alert("Error applying to batches: " + err.message);
+    } finally {
+      setMatrixSavingKey(null);
+    }
+  };
+
+  // Clone from another section
+  const handleCloneFromClass = async () => {
+    if (!cloneSourceBranchId || cloneSourceBranchId === matrixBranchId) return;
+    const sourceName = branches.find(b => b.id === cloneSourceBranchId)?.name || 'source class';
+    const targetName = branches.find(b => b.id === matrixBranchId)?.name || 'target class';
+
+    if (!window.confirm(`Clone all faculty allocations from "${sourceName}" into "${targetName}"?`)) return;
+
+    setIsCloning(true);
+    try {
+      const sourceAssigns = assignments.filter(a => a.branchId === cloneSourceBranchId);
+      if (sourceAssigns.length === 0) {
+        alert(`No allocations found in "${sourceName}" to clone.`);
+        setIsCloning(false);
+        return;
+      }
+
+      const sourceBatches = await db.getBatches(cloneSourceBranchId);
+      const targetBatches = matrixBatches;
+
+      const newClonedList: any[] = [];
+      for (const sa of sourceAssigns) {
+        let targetBatchId = 'ALL';
+        if (sa.batchId !== 'ALL') {
+          const sBatch = sourceBatches.find(b => b.id === sa.batchId);
+          const matchedTargetBatch = targetBatches.find(tb => tb.name.toLowerCase().trim() === sBatch?.name.toLowerCase().trim());
+          if (matchedTargetBatch) {
+            targetBatchId = matchedTargetBatch.id;
+          } else if (targetBatches.length > 0) {
+            targetBatchId = targetBatches[0].id;
+          }
+        }
+
+        const existing = assignments.find(a => a.branchId === matrixBranchId && a.subjectId === sa.subjectId && a.batchId === targetBatchId);
+        newClonedList.push({
+          id: existing?.id || `assign_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+          facultyId: sa.facultyId,
+          branchId: matrixBranchId,
+          batchId: targetBatchId,
+          subjectId: sa.subjectId
+        });
+      }
+
+      if (db.bulkAssignFaculty) {
+        await db.bulkAssignFaculty(newClonedList);
+      } else {
+        for (const c of newClonedList) await db.assignFaculty(c);
+      }
+
+      await loadData();
+      setIsCloneModalOpen(false);
+      setCloneSourceBranchId('');
+      alert(`✅ Successfully cloned ${newClonedList.length} allocations from ${sourceName}!`);
+    } catch (err: any) {
+      alert("Cloning failed: " + err.message);
+    } finally {
+      setIsCloning(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="bg-slate-200 p-1 rounded-lg inline-flex">
@@ -2364,70 +2843,364 @@ const FacultyManagement: React.FC = () => {
           )}
           {activeSubTab === 'allocations' && (
             <Card>
-              <div className="bg-indigo-50 p-4 rounded mb-4">
-                <div className="flex justify-between items-center mb-4">
-                  <h4 className="font-semibold text-indigo-900">{isEditingAssignment ? 'Edit Assignment' : 'New Assignment'}</h4>
-                  {isEditingAssignment && <button onClick={resetAssignForm} className="text-xs text-red-600 underline">Cancel Edit</button>}
+              {/* Header: Title & View Mode Toggle */}
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-slate-100 mb-6">
+                <div>
+                  <h4 className="text-base font-black text-slate-900 tracking-tight flex items-center gap-2">
+                    <Grid className="h-5 w-5 text-indigo-600" />
+                    Faculty Subject Allocation
+                  </h4>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Assign faculty members to theory lectures and lab batches with instant auto-save.
+                  </p>
                 </div>
-                <form onSubmit={handleAssign} className="grid grid-cols-1 md:grid-cols-5 gap-2 items-end">
-                  <Select label="Faculty" value={assignForm.facultyId} onChange={e => setAssignForm({ ...assignForm, facultyId: e.target.value })} className="mb-0 bg-white">{[<option key="def" value="">Select</option>, ...faculty.map(f => <option key={f.uid} value={f.uid}>{f.displayName}</option>)]}</Select>
-                  <Select label="Class" value={assignForm.branchId} onChange={e => { setAssignForm({ ...assignForm, branchId: e.target.value, batchId: '' }); loadBatches(e.target.value); }} className="mb-0 bg-white">{[<option key="def" value="">Select</option>, ...branches.filter(b => !b.view_only).map(b => <option key={b.id} value={b.id}>{b.name}</option>)]}</Select>
-                  <Select label="Subject" value={assignForm.subjectId} onChange={e => {
-                    const subj = subjects.find(s => s.id === e.target.value);
-                    setAssignForm({ ...assignForm, subjectId: e.target.value, batchId: (subj?.type !== 'lab') ? 'ALL' : '' });
-                  }} className="mb-0 bg-white">{[<option key="def" value="">Select</option>, ...subjects.map(s => <option key={s.id} value={s.id}>{s.name} ({s.code}) - {s.type || 'theory'}</option>)]}</Select>
-                  {subjects.find(s => s.id === assignForm.subjectId)?.type === 'lab' && (
-                    <Select label="Batch" value={assignForm.batchId} onChange={e => setAssignForm({ ...assignForm, batchId: e.target.value })} disabled={!assignForm.branchId} className="mb-0 bg-white">{[<option key="def" value="">Select Batch</option>, ...batches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)]}</Select>
-                  )}
-                  <Button type="submit" className="">{isEditingAssignment ? 'Update' : 'Assign'}</Button>
-                </form>
-              </div>
 
-              <div className="flex justify-between items-center mb-2 px-2">
-                <h5 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Current Allocations</h5>
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-bold text-slate-400">Filter by Class:</span>
-                  <select
-                    value={allocFilterBranchId}
-                    onChange={e => setAllocFilterBranchId(e.target.value)}
-                    className="text-xs border rounded p-1 bg-white text-slate-700"
+                <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded-xl border border-slate-200/80">
+                  <button
+                    type="button"
+                    onClick={() => setAllocViewMode('matrix')}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                      allocViewMode === 'matrix'
+                        ? 'bg-white text-indigo-700 shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
                   >
-                    <option value="">All Classes</option>
-                    {branches.filter(b => !b.view_only).map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-                  </select>
+                    <Grid className="h-3.5 w-3.5" />
+                    Matrix Grid (Fast)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAllocViewMode('classic')}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                      allocViewMode === 'classic'
+                        ? 'bg-white text-indigo-700 shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <List className="h-3.5 w-3.5" />
+                    Classic Form
+                  </button>
                 </div>
               </div>
 
-              {/* Mobile assignment cards */}
-              <div className="md:hidden divide-y divide-slate-100">
-                {assignments.filter(a => { const br = branches.find(b => b.id === a.branchId); if (br?.view_only) return false; return !allocFilterBranchId || a.branchId === allocFilterBranchId; }).map(a => {
-                  const fac = faculty.find(f => f.uid === a.facultyId);
-                  const sub = subjects.find(s => s.id === a.subjectId);
-                  const br = branches.find(b => b.id === a.branchId)?.name;
-                  return (
-                    <div key={a.id} className="flex items-center justify-between py-3 px-1 gap-3">
-                      <div className="min-w-0 flex-1">
-                        <div className="font-bold text-slate-900 text-sm truncate">{fac?.displayName}</div>
-                        <div className="text-[10px] text-slate-600">{sub ? `${sub.name} (${sub.code})` : 'Unknown'}</div>
-                        <div className="text-[10px] text-slate-400">{br} · {formatContext(a.batchId)}</div>
-                      </div>
-                      <div className="flex items-center gap-3 flex-shrink-0">
-                        <button onClick={() => handleEditAssignment(a)} className="text-blue-500 p-1"><Edit2 className="h-4 w-4" /></button>
-                        <button onClick={() => handleDeleteAssignment(a.id)} className="text-red-500 p-1"><Trash2 className="h-4 w-4" /></button>
-                      </div>
+              {allocViewMode === 'matrix' ? (
+                <div className="space-y-6">
+                  {/* Class Selector Bar & Actions */}
+                  <div className="bg-gradient-to-r from-indigo-50/70 via-slate-50 to-indigo-50/40 p-4 rounded-2xl border border-indigo-100/80 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <label className="text-xs font-black uppercase tracking-wider text-indigo-900 whitespace-nowrap">
+                        Select Class:
+                      </label>
+                      <select
+                        value={matrixBranchId}
+                        onChange={e => setMatrixBranchId(e.target.value)}
+                        className="text-sm font-bold bg-white text-slate-800 border-2 border-indigo-200 rounded-xl px-3.5 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 cursor-pointer"
+                      >
+                        {branches.filter(b => !b.view_only).map(b => (
+                          <option key={b.id} value={b.id}>
+                            {b.name}
+                          </option>
+                        ))}
+                      </select>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const otherBranches = branches.filter(b => b.id !== matrixBranchId && !b.view_only);
+                          if (otherBranches.length > 0) setCloneSourceBranchId(otherBranches[0].id);
+                          setIsCloneModalOpen(true);
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-white hover:bg-indigo-50 text-indigo-700 font-bold text-xs rounded-xl border border-indigo-200 shadow-sm transition-all"
+                      >
+                        <Copy className="h-3.5 w-3.5 text-indigo-600" />
+                        Clone from Another Class
+                      </button>
                     </div>
-                  );
-                })}
-              </div>
-              {/* Desktop assignment table */}
-              <table className="hidden md:table w-full text-sm text-left"><thead className="bg-slate-50 border-b"><tr><th className="p-2 text-slate-900">Faculty</th><th className="p-2 text-slate-900">Subject</th><th className="p-2 text-slate-900">Context</th><th className="p-2 text-right text-slate-900">Action</th></tr></thead>
-                <tbody>{assignments.filter(a => { const br = branches.find(b => b.id === a.branchId); if (br?.view_only) return false; return !allocFilterBranchId || a.branchId === allocFilterBranchId; }).map(a => {
-                  const fac = faculty.find(f => f.uid === a.facultyId);
-                  const sub = subjects.find(s => s.id === a.subjectId);
-                  const subDisplayName = sub ? `${sub.name} (${sub.code})` : 'Unknown Subject';
-                  const br = branches.find(b => b.id === a.branchId)?.name;
-                  return (<tr key={a.id} className="border-b"><td className="p-2 text-slate-900">{fac?.displayName}</td><td className="p-2 text-slate-900">{subDisplayName}</td><td className="p-2 text-xs text-slate-600"><div className="font-bold">{br}</div><div>{formatContext(a.batchId)}</div></td><td className="p-2 text-right flex justify-end gap-2"><button onClick={() => handleEditAssignment(a)} className="text-blue-500 hover:text-blue-700"><Edit2 className="h-4 w-4" /></button><button onClick={() => handleDeleteAssignment(a.id)} className="text-red-500 hover:text-red-700"><Trash2 className="h-4 w-4" /></button></td></tr>)
-                })}</tbody></table>
+
+                    {/* Progress Bar & Badges */}
+                    <div className="flex items-center gap-4 w-full lg:w-auto justify-between lg:justify-end">
+                      <div className="min-w-[150px] sm:min-w-[200px]">
+                        <div className="flex justify-between items-center text-[11px] font-bold text-slate-600 mb-1.5">
+                          <span>Assigned: {matrixStats.assignedSlots}/{matrixStats.totalSlots} Slots</span>
+                          <span className="text-indigo-600 font-black">{matrixStats.percent}%</span>
+                        </div>
+                        <div className="w-full bg-slate-200/90 h-2.5 rounded-full overflow-hidden p-0.5">
+                          <div
+                            className="bg-gradient-to-r from-indigo-500 to-emerald-500 h-full rounded-full transition-all duration-500 ease-out"
+                            style={{ width: `${matrixStats.percent}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      {matrixStats.unassignedSlots > 0 ? (
+                        <span className="inline-flex items-center px-3 py-1 rounded-full text-[11px] font-black uppercase tracking-wider bg-amber-50 text-amber-700 border border-amber-200 shadow-sm whitespace-nowrap">
+                          ⚠️ {matrixStats.unassignedSlots} Pending
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center px-3 py-1 rounded-full text-[11px] font-black uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-sm whitespace-nowrap">
+                          ✓ All Assigned
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Filter & Search Bar */}
+                  <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3">
+                    <div className="relative flex-1 max-w-sm">
+                      <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                      <input
+                        type="text"
+                        placeholder="Search subject code or title..."
+                        value={matrixSearch}
+                        onChange={e => setMatrixSearch(e.target.value)}
+                        className="w-full pl-10 pr-4 py-2 text-xs font-medium bg-slate-50 border border-slate-200 rounded-xl text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all"
+                      />
+                    </div>
+
+                    <label className="inline-flex items-center gap-2 cursor-pointer select-none text-xs font-bold text-slate-700 px-3.5 py-2 bg-slate-50 rounded-xl border border-slate-200 hover:bg-slate-100 transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={showUnassignedOnly}
+                        onChange={e => setShowUnassignedOnly(e.target.checked)}
+                        className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4"
+                      />
+                      <span>Show Unassigned Only</span>
+                    </label>
+                  </div>
+
+                  {/* Matrix Table */}
+                  <div className="overflow-x-auto border border-slate-200 rounded-2xl shadow-sm">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50/80 border-b border-slate-200 text-[10px] font-black text-slate-500 uppercase tracking-wider">
+                          <th className="py-3 px-4 w-28">Code</th>
+                          <th className="py-3 px-4 min-w-[180px]">Subject Name</th>
+                          <th className="py-3 px-3 w-24 text-center">Type</th>
+                          <th className="py-3 px-4 w-36">Batch / Scope</th>
+                          <th className="py-3 px-4 min-w-[280px]">Allocated Faculty</th>
+                          <th className="py-3 px-4 w-32 text-center">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 bg-white">
+                        {classSubjects.length === 0 ? (
+                          <tr>
+                            <td colSpan={6} className="py-8 text-center text-xs font-semibold text-slate-400">
+                              No subjects found matching your criteria.
+                            </td>
+                          </tr>
+                        ) : (
+                          classSubjects.flatMap(subj => {
+                            const isLab = subj.type === 'lab';
+                            const targetBatches = (isLab && matrixBatches.length > 0)
+                              ? matrixBatches
+                              : [{ id: 'ALL', name: 'All Batches', branchId: matrixBranchId }];
+
+                            return targetBatches.map((b, bIdx) => {
+                              const cellKey = `${subj.id}_${b.id}`;
+                              const currentAssignment = assignments.find(
+                                a => a.branchId === matrixBranchId && a.subjectId === subj.id && a.batchId === b.id
+                              );
+                              const assignedFacultyId = currentAssignment?.facultyId || '';
+                              const isSaving = matrixSavingKey === cellKey || matrixSavingKey === `all_${subj.id}`;
+                              const isJustSaved = matrixSavedKeys.has(cellKey);
+
+                              if (showUnassignedOnly && assignedFacultyId) {
+                                return null;
+                              }
+
+                              return (
+                                <tr
+                                  key={cellKey}
+                                  className={`transition-colors ${
+                                    isJustSaved
+                                      ? 'bg-emerald-50/50'
+                                      : assignedFacultyId
+                                      ? 'hover:bg-slate-50/60'
+                                      : 'bg-amber-50/20 hover:bg-amber-50/40'
+                                  }`}
+                                >
+                                  {/* Code */}
+                                  <td className="py-3 px-4 font-mono font-bold text-xs text-indigo-700">
+                                    {bIdx === 0 ? (
+                                      <span className="px-2 py-1 bg-indigo-50 rounded-md border border-indigo-100">
+                                        {subj.code}
+                                      </span>
+                                    ) : (
+                                      <span className="text-slate-300 font-normal">↳</span>
+                                    )}
+                                  </td>
+
+                                  {/* Subject Name */}
+                                  <td className="py-3 px-4">
+                                    {bIdx === 0 ? (
+                                      <div className="font-bold text-slate-900 text-xs">{subj.name}</div>
+                                    ) : (
+                                      <div className="text-[11px] text-slate-400 italic">↳ {subj.name}</div>
+                                    )}
+                                  </td>
+
+                                  {/* Type */}
+                                  <td className="py-3 px-3 text-center">
+                                    {bIdx === 0 && (
+                                      <span
+                                        className={`inline-block px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ${
+                                          isLab
+                                            ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                                            : 'bg-indigo-100 text-indigo-800 border border-indigo-200'
+                                        }`}
+                                      >
+                                        {subj.type || 'theory'}
+                                      </span>
+                                    )}
+                                  </td>
+
+                                  {/* Scope / Batch */}
+                                  <td className="py-3 px-4">
+                                    <span
+                                      className={`inline-flex items-center px-2 py-0.5 rounded-lg text-xs font-bold ${
+                                        b.id === 'ALL'
+                                          ? 'bg-slate-100 text-slate-700 border border-slate-200'
+                                          : 'bg-sky-50 text-sky-700 border border-sky-200'
+                                      }`}
+                                    >
+                                      {b.name}
+                                    </span>
+                                  </td>
+
+                                  {/* Allocated Faculty Dropdown */}
+                                  <td className="py-3 px-4">
+                                    <div className="flex items-center gap-2">
+                                      <div className="relative flex-1">
+                                        <select
+                                          value={assignedFacultyId}
+                                          disabled={isSaving}
+                                          onChange={e => handleMatrixAssign(subj.id, b.id, e.target.value)}
+                                          className={`w-full text-xs font-semibold py-1.5 pl-2.5 pr-8 rounded-xl border transition-all cursor-pointer ${
+                                            assignedFacultyId
+                                              ? 'border-indigo-200 bg-white text-slate-900 shadow-sm focus:ring-2 focus:ring-indigo-500'
+                                              : 'border-dashed border-amber-300 bg-amber-50/50 text-amber-800 hover:bg-white focus:bg-white focus:border-indigo-500'
+                                          }`}
+                                        >
+                                          <option value="">-- Unassigned --</option>
+                                          {[...faculty]
+                                            .sort((fa, fb) => fa.displayName.localeCompare(fb.displayName))
+                                            .map(f => {
+                                              const load = facultyWorkload.get(f.uid) || 0;
+                                              return (
+                                                <option key={f.uid} value={f.uid}>
+                                                  {f.displayName} ({load} assigned)
+                                                </option>
+                                              );
+                                            })}
+                                        </select>
+                                      </div>
+
+                                      {/* Quick Unassign Button */}
+                                      {assignedFacultyId && (
+                                        <button
+                                          type="button"
+                                          disabled={isSaving}
+                                          onClick={() => handleMatrixAssign(subj.id, b.id, '')}
+                                          title="Remove allocation"
+                                          className="p-1 text-slate-300 hover:text-rose-500 transition-colors"
+                                        >
+                                          <XCircle className="h-4 w-4" />
+                                        </button>
+                                      )}
+
+                                      {/* Lab shortcut: Apply to all batches */}
+                                      {isLab && matrixBatches.length > 1 && bIdx === 0 && assignedFacultyId && (
+                                        <button
+                                          type="button"
+                                          disabled={isSaving}
+                                          onClick={() => handleApplyToAllBatches(subj.id, assignedFacultyId)}
+                                          className="inline-flex items-center gap-1 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg border border-indigo-200 whitespace-nowrap transition-colors"
+                                          title="Apply this faculty to all batches of this lab"
+                                        >
+                                          <Zap className="h-3 w-3 text-amber-500 fill-amber-500" />
+                                          All Batches
+                                        </button>
+                                      )}
+                                    </div>
+                                  </td>
+
+                                  {/* Status */}
+                                  <td className="py-3 px-4 text-center">
+                                    {isSaving ? (
+                                      <span className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-600">
+                                        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Saving
+                                      </span>
+                                    ) : isJustSaved ? (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 animate-in fade-in zoom-in-95 duration-200">
+                                        <Check className="h-3 w-3" /> Saved ✓
+                                      </span>
+                                    ) : assignedFacultyId ? (
+                                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                        ✓ Assigned
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-amber-50 text-amber-700 border border-amber-200">
+                                        ⚠️ Pending
+                                      </span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            });
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : (
+                /* Classic List & Single Assign Form View (Retained) */
+                <>
+                  <div className="bg-indigo-50 p-4 rounded-xl mb-4">
+                    <div className="flex justify-between items-center mb-4">
+                      <h4 className="font-semibold text-indigo-900">{isEditingAssignment ? 'Edit Assignment' : 'New Assignment'}</h4>
+                      {isEditingAssignment && <button onClick={resetAssignForm} className="text-xs text-red-600 underline">Cancel Edit</button>}
+                    </div>
+                    <form onSubmit={handleAssign} className="grid grid-cols-1 md:grid-cols-5 gap-2 items-end">
+                      <Select label="Faculty" value={assignForm.facultyId} onChange={e => setAssignForm({ ...assignForm, facultyId: e.target.value })} className="mb-0 bg-white">{[<option key="def" value="">Select</option>, ...faculty.map(f => <option key={f.uid} value={f.uid}>{f.displayName}</option>)]}</Select>
+                      <Select label="Class" value={assignForm.branchId} onChange={e => { setAssignForm({ ...assignForm, branchId: e.target.value, batchId: '' }); loadBatches(e.target.value); }} className="mb-0 bg-white">{[<option key="def" value="">Select</option>, ...branches.filter(b => !b.view_only).map(b => <option key={b.id} value={b.id}>{b.name}</option>)]}</Select>
+                      <Select label="Subject" value={assignForm.subjectId} onChange={e => {
+                        const subj = subjects.find(s => s.id === e.target.value);
+                        setAssignForm({ ...assignForm, subjectId: e.target.value, batchId: (subj?.type !== 'lab') ? 'ALL' : '' });
+                      }} className="mb-0 bg-white">{[<option key="def" value="">Select</option>, ...subjects.map(s => <option key={s.id} value={s.id}>{s.name} ({s.code}) - {s.type || 'theory'}</option>)]}</Select>
+                      {subjects.find(s => s.id === assignForm.subjectId)?.type === 'lab' && (
+                        <Select label="Batch" value={assignForm.batchId} onChange={e => setAssignForm({ ...assignForm, batchId: e.target.value })} disabled={!assignForm.branchId} className="mb-0 bg-white">{[<option key="def" value="">Select Batch</option>, ...batches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)]}</Select>
+                      )}
+                      <Button type="submit" className="">{isEditingAssignment ? 'Update' : 'Assign'}</Button>
+                    </form>
+                  </div>
+
+                  <div className="flex justify-between items-center mb-2 px-2">
+                    <h5 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Current Allocations</h5>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-bold text-slate-400">Filter by Class:</span>
+                      <select
+                        value={allocFilterBranchId}
+                        onChange={e => setAllocFilterBranchId(e.target.value)}
+                        className="text-xs border rounded p-1 bg-white text-slate-700"
+                      >
+                        <option value="">All Classes</option>
+                        {branches.filter(b => !b.view_only).map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Desktop assignment table */}
+                  <table className="hidden md:table w-full text-sm text-left"><thead className="bg-slate-50 border-b"><tr><th className="p-2 text-slate-900">Faculty</th><th className="p-2 text-slate-900">Subject</th><th className="p-2 text-slate-900">Context</th><th className="p-2 text-right text-slate-900">Action</th></tr></thead>
+                    <tbody>{assignments.filter(a => { const br = branches.find(b => b.id === a.branchId); if (br?.view_only) return false; return !allocFilterBranchId || a.branchId === allocFilterBranchId; }).map(a => {
+                      const fac = faculty.find(f => f.uid === a.facultyId);
+                      const sub = subjects.find(s => s.id === a.subjectId);
+                      const subDisplayName = sub ? `${sub.name} (${sub.code})` : 'Unknown Subject';
+                      const br = branches.find(b => b.id === a.branchId)?.name;
+                      return (<tr key={a.id} className="border-b"><td className="p-2 text-slate-900">{fac?.displayName}</td><td className="p-2 text-slate-900">{subDisplayName}</td><td className="p-2 text-xs text-slate-600"><div className="font-bold">{br}</div><div>{formatContext(a.batchId)}</div></td><td className="p-2 text-right flex justify-end gap-2"><button onClick={() => handleEditAssignment(a)} className="text-blue-500 hover:text-blue-700"><Edit2 className="h-4 w-4" /></button><button onClick={() => handleDeleteAssignment(a.id)} className="text-red-500 hover:text-red-700"><Trash2 className="h-4 w-4" /></button></td></tr>)
+                    })}</tbody></table>
+                </>
+              )}
             </Card>
           )}
           {activeSubTab === 'coordinators' && (
@@ -2512,6 +3285,54 @@ const FacultyManagement: React.FC = () => {
           <div className="flex justify-end gap-3">
             <Button variant="secondary" onClick={() => setConfirmModalOpen(false)} className="px-6">Cancel</Button>
             <Button onClick={confirmAssignment} className="px-8 bg-indigo-600 hover:bg-indigo-700">Confirm & Save</Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Clone Allocations Modal */}
+      <Modal isOpen={isCloneModalOpen} onClose={() => setIsCloneModalOpen(false)} title="Clone Allocations from Another Class">
+        <div className="p-4 space-y-4">
+          <p className="text-sm text-slate-600">
+            Copy all faculty assignments from an existing class to <strong>{branches.find(b => b.id === matrixBranchId)?.name || 'the selected class'}</strong>.
+            Existing matching subject & batch assignments will be safely updated.
+          </p>
+
+          <Select
+            label="Source Class to Copy From"
+            value={cloneSourceBranchId}
+            onChange={e => setCloneSourceBranchId(e.target.value)}
+          >
+            <option value="">-- Choose Source Class --</option>
+            {branches
+              .filter(b => b.id !== matrixBranchId)
+              .map(b => {
+                const count = assignments.filter(a => a.branchId === b.id).length;
+                return (
+                  <option key={b.id} value={b.id}>
+                    {b.name} ({count} assignments)
+                  </option>
+                );
+              })}
+          </Select>
+
+          {cloneSourceBranchId && (
+            <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3 text-xs text-indigo-800">
+              <span className="font-semibold">Preview:</span> Found{' '}
+              <strong>{assignments.filter(a => a.branchId === cloneSourceBranchId).length}</strong> assignments in the source class. Matching subjects will be copied over.
+            </div>
+          )}
+
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="secondary" onClick={() => setIsCloneModalOpen(false)} disabled={isCloning}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleCloneFromClass}
+              disabled={!cloneSourceBranchId || isCloning}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white"
+            >
+              {isCloning ? 'Cloning...' : 'Confirm & Clone Now'}
+            </Button>
           </div>
         </div>
       </Modal>

@@ -72,6 +72,7 @@ export const getYearMode = (): YearMode => {
 
 export const setYearMode = (mode: YearMode) => {
     sessionStorage.removeItem('login_intent');
+    try { localStorage.removeItem('ams_current_user'); } catch (e) {}
     localStorage.setItem('acro_year_mode', mode);
     window.location.reload(); // Reload to re-initialise clients with correct credentials
 };
@@ -86,7 +87,13 @@ export const isConfigured = isYearConfigured(yearMode);
 const supabaseUrl = isConfigured ? resolvedUrl : 'https://dummy.supabase.co';
 const supabaseAnonKey = isConfigured ? resolvedKey : 'dummy';
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+    auth: {
+        autoRefreshToken: true,
+        persistSession: true,
+        detectSessionInUrl: true
+    }
+});
 
 // Special client for creating other users without swapping the admin's current session
 export const authClient = createClient(supabaseUrl, supabaseAnonKey, {

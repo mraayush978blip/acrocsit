@@ -106,7 +106,9 @@ export const FileUploader: React.FC<{ onFileSelect: (file: File) => void; accept
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      onFileSelect(e.target.files[0]);
+      const file = e.target.files[0];
+      e.target.value = '';
+      onFileSelect(file);
     }
   };
 
