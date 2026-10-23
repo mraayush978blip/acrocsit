@@ -241,7 +241,7 @@ class SupabaseService implements IDataService {
     const normalizedEmail = email.trim().toLowerCase();
     const loginIdentifier = normalizedEmail;
 
-    // Wrap auth call with fast-abort retry (8.5s per attempt, 3 attempts) so dropped packets recover fast
+    // Wrap auth call with fast-abort retry (15s per attempt, 2 attempts) for mobile/tablet network latency
     const { data: authData, error: authError } = await this._withRetry(
       () =>
         this._withTimeout(
@@ -249,11 +249,11 @@ class SupabaseService implements IDataService {
             email: loginIdentifier,
             password: pass,
           }),
-          8500,
+          15000,
           "Authentication request timed out. Retrying fresh connection..."
         ),
-      3,
-      500
+      2,
+      600
     );
 
     if (authError) throw authError;
@@ -268,11 +268,11 @@ class SupabaseService implements IDataService {
             .select('*')
             .eq('id', authData.user.id)
             .single(),
-          8000,
+          12000,
           "Profile query timed out. Retrying..."
         ),
-      3,
-      500
+      2,
+      600
     );
 
     // Map of emails that should always be recognized as Admin or Developer
