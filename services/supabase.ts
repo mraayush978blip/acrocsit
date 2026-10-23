@@ -93,7 +93,8 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     auth: {
         autoRefreshToken: true,
         persistSession: true,
-        detectSessionInUrl: true
+        detectSessionInUrl: true,
+        lock: async (_name, _acquireTimeout, fn) => await fn()
     }
 });
 
@@ -103,6 +104,7 @@ export const authClient = createClient(supabaseUrl, supabaseAnonKey, {
         persistSession: false,
         autoRefreshToken: false,
         detectSessionInUrl: false,
-        storageKey: 'sb-acropolis-auth-temp'
+        storageKey: 'sb-acropolis-auth-temp',
+        lock: async (_name, _acquireTimeout, fn) => await fn()
     }
 });
