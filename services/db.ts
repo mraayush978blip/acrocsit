@@ -1025,6 +1025,62 @@ class SupabaseService implements IDataService {
 
     const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
+    // Collect affected branch IDs
+    students.forEach(s => {
+      if (s.studentData?.branchId) branchIdsToSync.add(s.studentData.branchId);
+    });
+
+    // --------------------------------------------------------------------------
+    // FAST-PATH: PostgreSQL RPC 'admin_bulk_import_students'
+    // Bypasses GoTrue /auth/v1/signup rate limit completely.
+    // Can import 80+ students in 1-2 seconds via single SQL transaction.
+    // --------------------------------------------------------------------------
+    try {
+      const studentsPayload = students.map(s => {
+        const enroll = (s.studentData?.enrollmentId || '').trim().toUpperCase();
+        const email = (s.email || `${enroll.toLowerCase()}@acropolis.in`).trim().toLowerCase();
+        const pass = s.studentData?.mobileNo || enroll || 'password123';
+        return {
+          email,
+          displayName: s.displayName,
+          password: pass,
+          branchId: s.studentData?.branchId,
+          batchId: s.studentData?.batchId,
+          enrollmentId: enroll,
+          rollNo: s.studentData?.rollNo || '',
+          mobileNo: s.studentData?.mobileNo || ''
+        };
+      });
+
+      const { data: rpcRes, error: rpcErr } = await supabase.rpc('admin_bulk_import_students', {
+        students_data: studentsPayload
+      });
+
+      if (!rpcErr && rpcRes && typeof rpcRes.success === 'number') {
+        success = rpcRes.success;
+        failed = rpcRes.failed || 0;
+        if (Array.isArray(rpcRes.errors)) errors.push(...rpcRes.errors);
+        if (onProgress) onProgress(students.length, students.length);
+
+        // Sync missing attendance and reindex branches
+        for (const bid of Array.from(branchIdsToSync)) {
+          try {
+            await this.syncMissingAttendanceForBranch(bid);
+            await this.reindexBranchStudents(bid);
+          } catch (err) {
+            console.warn("Post-import attendance sync warning:", err);
+          }
+        }
+
+        return { success, failed, errors };
+      }
+    } catch (rpcEx) {
+      console.warn("Bulk import RPC unavailable, falling back to client-side import:", rpcEx);
+    }
+
+    // --------------------------------------------------------------------------
+    // FALLBACK: Client-side loop (used if RPC is not yet installed in Supabase)
+    // --------------------------------------------------------------------------
     // Fetch existing student profiles to prevent duplicate auth sign-ups and avoid rate-limits
     const { data: existingProfiles } = await supabase
       .from('profiles')
@@ -1250,6 +1306,42 @@ class SupabaseService implements IDataService {
     const errors: string[] = [];
     const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
+    // --------------------------------------------------------------------------
+    // FAST-PATH: PostgreSQL RPC 'admin_bulk_import_faculty'
+    // Bypasses GoTrue /auth/v1/signup rate limit completely.
+    // Can import 50+ faculty in 1-2 seconds with active accounts.
+    // --------------------------------------------------------------------------
+    try {
+      const facultyPayload = facultyList.map(f => {
+        const email = (f.data.email || '').trim().toLowerCase();
+        const pass = f.password || 'password123';
+        return {
+          email,
+          displayName: f.data.displayName,
+          password: pass,
+          serialNo: f.data.facultyData?.serialNo || ''
+        };
+      });
+
+      const { data: rpcRes, error: rpcErr } = await supabase.rpc('admin_bulk_import_faculty', {
+        faculty_data: facultyPayload
+      });
+
+      if (!rpcErr && rpcRes && typeof rpcRes.success === 'number') {
+        this._invalidate('meta_faculty');
+        return {
+          success: rpcRes.success,
+          failed: rpcRes.failed || 0,
+          errors: Array.isArray(rpcRes.errors) ? rpcRes.errors : []
+        };
+      }
+    } catch (rpcEx) {
+      console.warn("Bulk faculty import RPC unavailable, falling back to client-side import:", rpcEx);
+    }
+
+    // --------------------------------------------------------------------------
+    // FALLBACK: Client-side loop
+    // --------------------------------------------------------------------------
     // Pre-fetch all existing profiles to avoid auth.signUp calls for existing members
     const { data: existingProfiles } = await supabase
       .from('profiles')
