@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AcroAMS - Teacher & Coordinator User Manual</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --primary: #4f46e5;
+      --primary-dark: #3730a3;
+      --primary-light: #e0e7ff;
+      --slate-900: #0f172a;
+      --slate-800: #1e293b;
+      --slate-700: #334155;
+      --slate-600: #475569;
+      --slate-500: #64748b;
+      --slate-200: #e2e8f0;
+      --slate-100: #f1f5f9;
+      --slate-50: #f8fafc;
+      --emerald-600: #059669;
+      --emerald-50: #ecfdf5;
+      --rose-600: #e11d48;
+      --rose-50: #fff1f2;
+      --amber-600: #d97706;
+      --amber-50: #fffbeb;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      background-color: var(--slate-50);
+      color: var(--slate-800);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Top Sticky Navigation */
+    .top-bar {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--slate-200);
+      padding: 1rem 1.5rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .brand-logo {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, var(--primary), #818cf8);
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 1.1rem;
+      box-shadow: 0 4px 12px rgba(79, 70, 229, 0.25);
+    }
+
+    .brand-text h1 {
+      font-size: 1.05rem;
+      font-weight: 800;
+      color: var(--slate-900);
+      line-height: 1.2;
+    }
+
+    .brand-text p {
+      font-size: 0.75rem;
+      color: var(--slate-500);
+      font-weight: 600;
+    }
+
+    .action-buttons {
+      display: flex;
+      gap: 0.75rem;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 1rem;
+      border-radius: 0.65rem;
+      font-size: 0.825rem;
+      font-weight: 700;
+      text-decoration: none;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      border: 1px solid transparent;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: white;
+    }
+    .btn-primary:hover {
+      background: var(--primary-dark);
+      box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
+    }
+
+    .btn-outline {
+      background: white;
+      border-color: var(--slate-200);
+      color: var(--slate-700);
+    }
+    .btn-outline:hover {
+      background: var(--slate-100);
+    }
+
+    /* Container Layout */
+    .container {
+      max-width: 960px;
+      margin: 2rem auto;
+      padding: 0 1.5rem 4rem;
+    }
+
+    /* Hero Banner */
+    .hero-card {
+      background: linear-gradient(135deg, #1e1b4b, #312e81);
+      color: white;
+      padding: 2.5rem 2rem;
+      border-radius: 1.5rem;
+      box-shadow: 0 10px 25px -5px rgba(30, 27, 75, 0.3);
+      margin-bottom: 2.5rem;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero-card::after {
+      content: '';
+      position: absolute;
+      top: -50%;
+      right: -10%;
+      width: 300px;
+      height: 300px;
+      background: radial-gradient(circle, rgba(129, 140, 248, 0.2) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .hero-badge {
+      display: inline-block;
+      padding: 0.3rem 0.75rem;
+      background: rgba(255, 255, 255, 0.15);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 1rem;
+    }
+
+    .hero-title {
+      font-size: 1.85rem;
+      font-weight: 800;
+      line-height: 1.25;
+      margin-bottom: 0.75rem;
+    }
+
+    .hero-subtitle {
+      font-size: 0.95rem;
+      color: #c7d2fe;
+      max-width: 700px;
+    }
+
+    /* Quick Links */
+    .quick-nav {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2.5rem;
+    }
+
+    .nav-card {
+      background: white;
+      border: 1px solid var(--slate-200);
+      padding: 1rem 1.25rem;
+      border-radius: 1rem;
+      text-decoration: none;
+      color: var(--slate-800);
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      transition: all 0.2s;
+    }
+
+    .nav-card:hover {
+      border-color: var(--primary);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+      transform: translateY(-2px);
+    }
+
+    .nav-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: var(--primary-light);
+      color: var(--primary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 0.9rem;
+    }
+
+    .nav-text {
+      font-size: 0.85rem;
+      font-weight: 700;
+    }
+
+    /* Section & Content Blocks */
+    .section-block {
+      background: white;
+      border: 1px solid var(--slate-200);
+      border-radius: 1.25rem;
+      padding: 2rem;
+      margin-bottom: 2rem;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02);
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 1.25rem;
+      padding-bottom: 0.75rem;
+      border-bottom: 2px solid var(--slate-100);
+    }
+
+    .section-num {
+      background: var(--primary);
+      color: white;
+      font-weight: 800;
+      font-size: 0.8rem;
+      padding: 0.25rem 0.65rem;
+      border-radius: 0.5rem;
+    }
+
+    .section-title {
+      font-size: 1.25rem;
+      font-weight: 800;
+      color: var(--slate-900);
+    }
+
+    /* Step System */
+    .step-list {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      margin: 1.25rem 0;
+    }
+
+    .step-item {
+      display: flex;
+      gap: 1rem;
+      align-items: flex-start;
+      background: var(--slate-50);
+      border: 1px solid var(--slate-200);
+      padding: 1rem 1.25rem;
+      border-radius: 0.85rem;
+    }
+
+    .step-badge {
+      background: var(--primary);
+      color: white;
+      font-size: 0.75rem;
+      font-weight: 800;
+      padding: 0.25rem 0.55rem;
+      border-radius: 0.4rem;
+      flex-shrink: 0;
+      margin-top: 0.1rem;
+    }
+
+    .step-content h4 {
+      font-size: 0.925rem;
+      font-weight: 700;
+      color: var(--slate-900);
+      margin-bottom: 0.25rem;
+    }
+
+    .step-content p {
+      font-size: 0.85rem;
+      color: var(--slate-600);
+    }
+
+    /* Callout Boxes */
+    .callout {
+      border-radius: 0.85rem;
+      padding: 1rem 1.25rem;
+      margin: 1.25rem 0;
+      display: flex;
+      gap: 0.75rem;
+      align-items: flex-start;
+      border: 1px solid;
+    }
+
+    .callout-info {
+      background: var(--primary-light);
+      border-color: #c7d2fe;
+      color: var(--primary-dark);
+    }
+
+    .callout-tip {
+      background: var(--emerald-50);
+      border-color: #a7f3d0;
+      color: #065f46;
+    }
+
+    .callout-warning {
+      background: var(--amber-50);
+      border-color: #fde68a;
+      color: #92400e;
+    }
+
+    .callout-danger {
+      background: var(--rose-50);
+      border-color: #fecdd3;
+      color: #9f1239;
+    }
+
+    .callout-icon {
+      font-size: 1.2rem;
+      flex-shrink: 0;
+      line-height: 1;
+      margin-top: 0.1rem;
+    }
+
+    .callout-body strong {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 800;
+      margin-bottom: 0.2rem;
+    }
+
+    .callout-body p {
+      font-size: 0.825rem;
+      line-height: 1.5;
+    }
+
+    /* Table */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1.25rem 0;
+      font-size: 0.85rem;
+    }
+
+    th, td {
+      padding: 0.75rem 1rem;
+      border: 1px solid var(--slate-200);
+      text-align: left;
+    }
+
+    th {
+      background: var(--slate-100);
+      font-weight: 800;
+      color: var(--slate-700);
+    }
+
+    /* Print Styles */
+    @media print {
+      body {
+        background: white;
+        color: black;
+      }
+      .top-bar, .action-buttons, .quick-nav {
+        display: none !important;
+      }
+      .container {
+        max-width: 100%;
+        margin: 0;
+        padding: 0;
+      }
+      .section-block {
+        border: none;
+        box-shadow: none;
+        padding: 1rem 0;
+        page-break-inside: avoid;
+      }
+      .hero-card {
+        background: #1e1b4b !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+      .step-item, .callout {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+        page-break-inside: avoid;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Sticky Navigation -->
+  <header class="top-bar">
+    <div class="brand">
+      <div class="brand-logo">A</div>
+      <div class="brand-text">
+        <h1>Acropolis AMS Portal</h1>
+        <p>Faculty & Coordinator User Manual</p>
+      </div>
+    </div>
+    <div class="action-buttons">
+      <button class="btn btn-outline" onclick="window.print()">
+        🖨️ Print / Save as PDF
+      </button>
+      <a href="/AcroAMS_Teacher_Coordinator_Manual.pdf" download class="btn btn-primary">
+        ⬇️ Download PDF Manual
+      </a>
+    </div>
+  </header>
+
+  <main class="container">
+
+    <!-- Hero Card -->
+    <section class="hero-card">
+      <span class="hero-badge">Standard Operating Procedure</span>
+      <h2 class="hero-title">Teacher & Class Coordinator Official User Manual</h2>
+      <p class="hero-subtitle">
+        A comprehensive, step-by-step handbook covering daily attendance marking, editing past records, deleting mistake entries, shift lectures, live monitoring, and Excel reports.
+      </p>
+    </section>
+
+    <!-- Quick Navigation -->
+    <nav class="quick-nav">
+      <a href="#sec-marking" class="nav-card">
+        <div class="nav-icon">1</div>
+        <div class="nav-text">Mark Attendance</div>
+      </a>
+      <a href="#sec-edit" class="nav-card">
+        <div class="nav-icon">2</div>
+        <div class="nav-text">Edit Particular Day</div>
+      </a>
+      <a href="#sec-delete" class="nav-card">
+        <div class="nav-icon">3</div>
+        <div class="nav-text">Delete Attendance</div>
+      </a>
+      <a href="#sec-shift" class="nav-card">
+        <div class="nav-icon">4</div>
+        <div class="nav-text">Shift / Proxy Class</div>
+      </a>
+      <a href="#sec-coordinator" class="nav-card">
+        <div class="nav-icon">5</div>
+        <div class="nav-text">Coordinator Tools</div>
+      </a>
+      <a href="#sec-reports" class="nav-card">
+        <div class="nav-icon">6</div>
+        <div class="nav-text">Excel & Defaulters</div>
+      </a>
+    </nav>
+
+    <!-- SECTION 1: MARK ATTENDANCE -->
+    <article class="section-block" id="sec-marking">
+      <div class="section-header">
+        <span class="section-num">01</span>
+        <h3 class="section-title">Marking Daily Attendance (Theory & Lab)</h3>
+      </div>
+      <p>Teachers can take attendance on mobile phones, tablets, or laptops within 20–30 seconds per class.</p>
+
+      <div class="step-list">
+        <div class="step-item">
+          <span class="step-badge">STEP 1</span>
+          <div class="step-content">
+            <h4>Select Class & Subject</h4>
+            <p>From your Faculty Dashboard, tap on your allocated Class card (e.g. <strong>CSIT-1</strong>) and click on your <strong>Subject</strong>.</p>
+          </div>
+        </div>
+
+        <div class="step-item">
+          <span class="step-badge">STEP 2</span>
+          <div class="step-content">
+            <h4>Select Date & Time Slot</h4>
+            <p>Date defaults to today. Choose the <strong>Lecture Slot</strong> (Slot 1, Slot 2, Slot 3, etc.) according to your college timetable.</p>
+          </div>
+        </div>
+
+        <div class="step-item">
+          <span class="step-badge">STEP 3</span>
+          <div class="step-content">
+            <h4>Select Scope (Theory vs Lab Batch)</h4>
+            <p>For Theory classes, select <strong>ALL</strong>. For Lab sessions, select your respective batch (<strong>B1</strong> or <strong>B2</strong>).</p>
+          </div>
+        </div>
+
+        <div class="step-item">
+          <span class="step-badge">STEP 4</span>
+          <div class="step-content">
+            <h4>Quick Bulk Toggle & Manual Overrides</h4>
+            <p>Tap <strong>"Mark All Present"</strong> (turns everyone Green) or <strong>"Mark All Absent"</strong>. Then quickly tap only the few absentees to toggle them off.</p>
+          </div>
+        </div>
+
+        <div class="step-item">
+          <span class="step-badge">STEP 5</span>
+          <div class="step-content">
+            <h4>Save & Cloud Sync</h4>
+            <p>Tap <strong>"Save Attendance"</strong>. A verification modal displays the total Present & Absent count. Click <strong>"Confirm & Save"</strong> to sync.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="callout callout-tip">
+        <div class="callout-icon">💡</div>
+        <div class="callout-body">
+          <strong>Pro-Tip for Fast Attendance:</strong>
+          <p>Click "Mark All Present", call out only roll numbers of absentees, toggle them off, and save. Average time: under 20 seconds!</p>
+        </div>
+      </div>
+    </article>
+
+    <!-- SECTION 2: EDIT ATTENDANCE -->
+    <article class="section-block" id="sec-edit">
+      <div class="section-header">
+        <span class="section-num">02</span>
+        <h3 class="section-title">How to Edit a Particular Day's Attendance</h3>
+      </div>
+      <p>If you made a mistake or a student was later marked Present with permission, you can rectify past records anytime.</p>
+
+      <div class="step-list">
+        <div class="step-item">
+          <span class="step-badge">STEP 1</span>
+          <div class="step-content">
+            <h4>Go to "Mark Attendance" Tab</h4>
+            <p>Open the class and subject where the attendance was originally taken.</p>
+          </div>
+        </div>
+
+        <div class="step-item">
+          <span class="step-badge">STEP 2</span>
+          <div class="step-content">
+            <h4>Select the Target Past Date & Slot</h4>
+            <p>Click the <strong>Date picker</strong> and choose the exact date you want to edit. Select the <strong>Slot number</strong> that was marked on that date.</p>
+          </div>
+        </div>
+
+        <div class="step-item">
+          <span class="step-badge">STEP 3</span>
+          <div class="step-content">
+            <h4>Auto-Load Existing Attendance</h4>
+            <p>The system will automatically detect and load each student's saved status for that lecture slot.</p>
+          </div>
+        </div>
+
+        <div class="step-item">
+          <span class="step-badge">STEP 4</span>
+          <div class="step-content">
+            <h4>Toggle Changes & Save</h4>
+            <p>Flip the toggle switch of the students you want to correct. Click <strong>"Save Attendance"</strong>.</p>
+          </div>
+        </div>
+
+        <div class="step-item">
+          <span class="step-badge">STEP 5</span>
+          <div class="step-content">
+            <h4>Confirm Overwrite Modal</h4>
+            <p>The confirmation modal will notify you: <em>"Overwriting existing attendance"</em>. Click <strong>"Confirm & Save"</strong>. Existing records are updated with zero duplicates.</p>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- SECTION 3: DELETE ATTENDANCE -->
+    <article class="section-block" id="sec-delete">
+      <div class="section-header">
+        <span class="section-num">03</span>
+        <h3 class="section-title">How to Delete a Particular Day's Attendance</h3>
+      </div>
+      <p>Use this if attendance was marked on the wrong date, wrong slot, or marked on an unforeseen holiday.</p>
+
+      <div class="step-list">
+        <div class="step-item">
+          <span class="step-badge">STEP 1</span>
+          <div class="step-content">
+            <h4>Open "Preview Attendance" / "History" Tab</h4>
+            <p>Inside your subject class view, click on the <strong>Preview Attendance</strong> tab.</p>
+          </div>
+        </div>
+
+        <div class="step-item">
+          <span class="step-badge">STEP 2</span>
+          <div class="step-content">
+            <h4>Filter to the Exact Date</h4>
+            <p>Use the date filter in the toolbar to select the specific date you want to delete (e.g. 2026-10-18).</p>
+          </div>
+        </div>
+
+        <div class="step-item">
+          <span class="step-badge">STEP 3</span>
+          <div class="step-content">
+            <h4>Click the Red Trash Icon</h4>
+            <p>A red <strong>Trash button</strong> appears in the date summary bar when a single date is selected.</p>
+          </div>
+        </div>
+
+        <div class="step-item">
+          <span class="step-badge">STEP 4</span>
+          <div class="step-content">
+            <h4>Select Slot in Delete Modal</h4>
+            <p>A modal opens displaying all slots marked on that date (e.g., Slot 1, Slot 2). Check the slot(s) you wish to delete.</p>
+          </div>
+        </div>
+
+        <div class="step-item">
+          <span class="step-badge">STEP 5</span>
+          <div class="step-content">
+            <h4>Confirm Deletion</h4>
+            <p>Click <strong>"Delete Selected Slots"</strong>. The session is safely removed from the student roster and percentages update immediately.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="callout callout-warning">
+        <div class="callout-icon">🛡️</div>
+        <div class="callout-body">
+          <strong>12-Hour Safety Recycle Bin:</strong>
+          <p>Deleted attendance is not destroyed immediately. It moves to the <strong>Recycle Bin</strong> for 12 hours. If deleted by mistake, you can restore it anytime before the 12-hour window expires.</p>
+        </div>
+      </div>
+    </article>
+
+    <!-- SECTION 4: SHIFT LECTURES -->
+    <article class="section-block" id="sec-shift">
+      <div class="section-header">
+        <span class="section-num">04</span>
+        <h3 class="section-title">Shift / Extra / Proxy Lectures</h3>
+      </div>
+      <p>When taking a lecture on behalf of another teacher or taking an extra slot:</p>
+      <div class="step-list">
+        <div class="step-item">
+          <span class="step-badge">OPTION A</span>
+          <div class="step-content">
+            <h4>Shift Lecture Modal</h4>
+            <p>Tap <strong>"Shift Lecture"</strong> button. Select the original faculty, target slot, and reason. The lecture will be logged under your subject with full audit tracking.</p>
+          </div>
+        </div>
+        <div class="step-item">
+          <span class="step-badge">OPTION B</span>
+          <div class="step-content">
+            <h4>Extra Attendance Tab</h4>
+            <p>For remedial, revision, or non-scheduled lectures, use the <strong>Extra History</strong> / <strong>Extra Attendance</strong> tool to credit students without disrupting normal slot statistics.</p>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- SECTION 5: CLASS COORDINATOR TOOLS -->
+    <article class="section-block" id="sec-coordinator">
+      <div class="section-header">
+        <span class="section-num">05</span>
+        <h3 class="section-title">Class Coordinator Live Monitor</h3>
+      </div>
+      <p>Coordinators have 360-degree visibility over all faculties assigned to their branch.</p>
+
+      <div class="step-list">
+        <div class="step-item">
+          <span class="step-badge">STEP 1</span>
+          <div class="step-content">
+            <h4>Access "Coordinator" Section</h4>
+            <p>Switch to the <strong>Class Coordinator</strong> view from the navigation menu.</p>
+          </div>
+        </div>
+
+        <div class="step-item">
+          <span class="step-badge">STEP 2</span>
+          <div class="step-content">
+            <h4>Open "Faculty Monitor" Tab</h4>
+            <p>Shows every subject allocated to the class for today (or any selected calendar date).</p>
+          </div>
+        </div>
+
+        <div class="step-item">
+          <span class="step-badge">STEP 3</span>
+          <div class="step-content">
+            <h4>Real-time Status Badges</h4>
+            <p>
+              <span style="color: var(--emerald-600); font-weight: 800;">✓ Complete:</span> Attendance has already been taken and synced.<br>
+              <span style="color: var(--rose-600); font-weight: 800;">⚠️ Pending:</span> Faculty has not yet taken attendance for today.
+            </p>
+          </div>
+        </div>
+      </div>
+    </article>
+
+    <!-- SECTION 6: REPORTS & EXCEL EXPORT -->
+    <article class="section-block" id="sec-reports">
+      <div class="section-header">
+        <span class="section-num">06</span>
+        <h3 class="section-title">Generating Reports & Defaulter List (Excel)</h3>
+      </div>
+      <p>Coordinators can export clean, official spreadsheets formatted for notice boards and HOD meetings.</p>
+
+      <div class="step-list">
+        <div class="step-item">
+          <span class="step-badge">STEP 1</span>
+          <div class="step-content">
+            <h4>Open "Reports & Analytics" Tab</h4>
+            <p>Located inside the Coordinator dashboard.</p>
+          </div>
+        </div>
+
+        <div class="step-item">
+          <span class="step-badge">STEP 2</span>
+          <div class="step-content">
+            <h4>Select Date Range & Subject Scope</h4>
+            <p>Choose <strong>"Till Today"</strong> or specify a <strong>Custom Date Range</strong>. Choose <strong>All Subjects</strong>, <strong>Theory Only</strong>, or <strong>Lab Only</strong>.</p>
+          </div>
+        </div>
+
+        <div class="step-item">
+          <span class="step-badge">STEP 3</span>
+          <div class="step-content">
+            <h4>Filter Defaulter Students</h4>
+            <p>Select <strong>"Filtered"</strong> and set condition (e.g. <code>&le; 75%</code>). The table instantly isolates students who do not meet the mandatory attendance criteria.</p>
+          </div>
+        </div>
+
+        <div class="step-item">
+          <span class="step-badge">STEP 4</span>
+          <div class="step-content">
+            <h4>Download Official Excel Sheet</h4>
+            <p>Click <strong>"Download Excel Report"</strong>. The generated <code>.xlsx</code> file includes S.No, Enrollment ID, Roll No, Student Name, Subject-wise attended/total counts, and Aggregate Attendance Percentage.</p>
+          </div>
+        </div>
+      </div>
+    </article>
+
+  </main>
+
+</body>
+</html>
