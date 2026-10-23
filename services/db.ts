@@ -112,6 +112,14 @@ class SupabaseService implements IDataService {
   private _cache: Record<string, { data: any, ts: number }> = {};
   private readonly DEFAULT_TTL = 1000 * 60 * 10; // 10 minutes
 
+  /** Wrap a promise with a timeout so stalled network requests fail gracefully instead of hanging indefinitely. */
+  private _withTimeout<T>(promise: PromiseLike<T>, timeoutMs = 12000, errorMsg = "Database request timed out"): Promise<T> {
+    return Promise.race([
+      Promise.resolve(promise),
+      new Promise<T>((_, reject) => setTimeout(() => reject(new Error(errorMsg)), timeoutMs))
+    ]);
+  }
+
   /** Retry a fetch operation on transient network errors (e.g. "Failed to fetch" on Supabase cold-start). */
   private async _withRetry<T>(fn: () => Promise<T>, maxAttempts = 3, baseDelayMs = 800): Promise<T> {
     let lastError: any;
@@ -221,25 +229,32 @@ class SupabaseService implements IDataService {
     const normalizedEmail = email.trim().toLowerCase();
     const loginIdentifier = normalizedEmail;
 
-    // Wrap auth call with retry to handle transient "Failed to fetch" errors
-    // (common on Supabase cold-starts or brief network blips across year portals)
+    // Wrap auth call with retry and timeout to handle cold-starts or latency
     const { data: authData, error: authError } = await this._withRetry(() =>
-      supabase.auth.signInWithPassword({
-        email: loginIdentifier,
-        password: pass,
-      })
+      this._withTimeout(
+        supabase.auth.signInWithPassword({
+          email: loginIdentifier,
+          password: pass,
+        }),
+        25000,
+        "Authentication request timed out (25s). Supabase might be waking up or experiencing latency. Please try again."
+      )
     );
 
     if (authError) throw authError;
     if (!authData.user) throw new Error("Login failed");
 
-    // Fetch profile (also with retry for resilience)
+    // Fetch profile (also with retry and timeout for resilience against hung queries or RLS loops)
     const { data: profile, error: profError } = await this._withRetry(async () =>
-      await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', authData.user.id)
-        .single()
+      await this._withTimeout(
+        supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', authData.user.id)
+          .single(),
+        20000,
+        "Profile fetch timed out (20s). The database might be waking up or experiencing high latency."
+      )
     );
 
     // Map of emails that should always be recognized as Admin or Developer
@@ -251,7 +266,8 @@ class SupabaseService implements IDataService {
     const targetRole = ELEVATED_ROLES[normalizedEmail];
 
     if (profError || !profile) {
-      throw new Error("Profile not found. Please contact administrator to be added.");
+      console.error("[Login] Profile fetch failed:", profError, "Auth User ID:", authData.user.id);
+      throw new Error(`Profile record not found for ${normalizedEmail}. Please ensure this user has an entry in the 'profiles' table.`);
     }
 
     const mappedUser = this.mapProfile(profile);
