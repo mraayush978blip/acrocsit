@@ -79,6 +79,7 @@ export const Login: React.FC<LoginProps> = ({ onLogin }) => {
         loginUser = `${loginUser}@acropolis.in`;
       }
 
+      console.info(`[Login Attempt] Role: ${selectedRole} | Year: ${yearMode} | User: ${loginUser}`);
       const user = await db.login(loginUser, password);
 
       if (user.role === 'ADMIN' || user.role === 'DEVELOPER') {

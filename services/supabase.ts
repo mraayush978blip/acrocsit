@@ -87,6 +87,8 @@ export const isConfigured = isYearConfigured(yearMode);
 const supabaseUrl = isConfigured ? resolvedUrl : 'https://dummy.supabase.co';
 const supabaseAnonKey = isConfigured ? resolvedKey : 'dummy';
 
+console.info(`[Supabase Init] Year: ${yearMode} | Endpoint: ${supabaseUrl}`);
+
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     auth: {
         autoRefreshToken: true,
