@@ -120,21 +120,33 @@ class SupabaseService implements IDataService {
     ]);
   }
 
-  /** Retry a fetch operation on transient network errors (e.g. "Failed to fetch" on Supabase cold-start). */
-  private async _withRetry<T>(fn: () => Promise<T>, maxAttempts = 3, baseDelayMs = 800): Promise<T> {
+  /** Retry a fetch operation on transient network errors or timeouts. */
+  private async _withRetry<T>(fn: () => Promise<T>, maxAttempts = 3, baseDelayMs = 600): Promise<T> {
     let lastError: any;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         return await fn();
       } catch (err: any) {
         lastError = err;
-        const isNetworkError =
-          err?.message === 'Failed to fetch' ||
-          err?.message?.includes('NetworkError') ||
-          err?.message?.includes('network') ||
+        const msg = String(err?.message || '').toLowerCase();
+        const isNetworkOrTimeout =
+          msg.includes('failed to fetch') ||
+          msg.includes('network') ||
+          msg.includes('timed out') ||
+          msg.includes('timeout') ||
           err?.name === 'TypeError';
-        // Only retry on transient network errors, not auth/credential errors
-        if (!isNetworkError || attempt === maxAttempts) throw err;
+        
+        // Don't retry credential errors (like wrong password or user not found)
+        const isAuthCredentialError =
+          msg.includes('invalid login credentials') ||
+          msg.includes('invalid credentials') ||
+          msg.includes('email not confirmed');
+
+        if (isAuthCredentialError || !isNetworkOrTimeout || attempt === maxAttempts) {
+          throw err;
+        }
+
+        console.warn(`[Network Retry] Attempt ${attempt} failed: ${err.message}. Retrying in ${baseDelayMs * attempt}ms...`);
         await new Promise(res => setTimeout(res, baseDelayMs * attempt));
       }
     }
@@ -229,32 +241,38 @@ class SupabaseService implements IDataService {
     const normalizedEmail = email.trim().toLowerCase();
     const loginIdentifier = normalizedEmail;
 
-    // Wrap auth call with retry and timeout to handle cold-starts or latency
-    const { data: authData, error: authError } = await this._withRetry(() =>
-      this._withTimeout(
-        supabase.auth.signInWithPassword({
-          email: loginIdentifier,
-          password: pass,
-        }),
-        25000,
-        "Authentication request timed out (25s). Supabase might be waking up or experiencing latency. Please try again."
-      )
+    // Wrap auth call with fast-abort retry (8.5s per attempt, 3 attempts) so dropped packets recover fast
+    const { data: authData, error: authError } = await this._withRetry(
+      () =>
+        this._withTimeout(
+          supabase.auth.signInWithPassword({
+            email: loginIdentifier,
+            password: pass,
+          }),
+          8500,
+          "Authentication request timed out. Retrying fresh connection..."
+        ),
+      3,
+      500
     );
 
     if (authError) throw authError;
     if (!authData.user) throw new Error("Login failed");
 
     // Fetch profile (also with retry and timeout for resilience against hung queries or RLS loops)
-    const { data: profile, error: profError } = await this._withRetry(async () =>
-      await this._withTimeout(
-        supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', authData.user.id)
-          .single(),
-        20000,
-        "Profile fetch timed out (20s). The database might be waking up or experiencing high latency."
-      )
+    const { data: profile, error: profError } = await this._withRetry(
+      () =>
+        this._withTimeout(
+          supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', authData.user.id)
+            .single(),
+          8000,
+          "Profile query timed out. Retrying..."
+        ),
+      3,
+      500
     );
 
     // Map of emails that should always be recognized as Admin or Developer
