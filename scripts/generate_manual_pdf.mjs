@@ -40,7 +40,7 @@ function drawHeader() {
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
   doc.setTextColor(COLOR_MUTED[0], COLOR_MUTED[1], COLOR_MUTED[2]);
-  doc.text('ACROPOLIS AMS  •  TEACHER & COORDINATOR USER MANUAL', margin, margin);
+  doc.text('ACROPOLIS AMS  •  DESIGNED & DEVELOPED BY AAYUSH SHARMA', margin, margin);
   doc.setDrawColor(COLOR_BORDER[0], COLOR_BORDER[1], COLOR_BORDER[2]);
   doc.setLineWidth(0.3);
   doc.line(margin, margin + 2, pageWidth - margin, margin + 2);
@@ -55,7 +55,7 @@ function drawFooter() {
   doc.setLineWidth(0.3);
   doc.line(margin, pageHeight - margin - 2, pageWidth - margin, pageHeight - margin - 2);
   doc.text(`Page ${currentPage}`, pageWidth - margin - 12, pageHeight - margin + 3);
-  doc.text('Confidential - For Internal Academic Use Only', margin, pageHeight - margin + 3);
+  doc.text('Developed & Architected by Aayush Sharma  •  Confidential', margin, pageHeight - margin + 3);
 }
 
 function addTitle(text) {
@@ -202,10 +202,14 @@ yPos = 22;
 addSubtitle('Acropolis Institute of Technology & Research');
 addTitle('Attendance Management System (AMS)');
 addSubtitle('Official User Manual: Teacher & Class Coordinator Guide');
-yPos += 4;
+doc.setFont('helvetica', 'bold');
+doc.setFontSize(10);
+doc.setTextColor(COLOR_ACCENT[0], COLOR_ACCENT[1], COLOR_ACCENT[2]);
+doc.text('Designed, Engineered & Architected by Aayush Sharma', margin, yPos);
+yPos += 6;
 
-addCallout('NOTE', 'PURPOSE OF THIS MANUAL', 
-  'This guide provides step-by-step instructions for Faculty Members and Class Coordinators to mark attendance, edit past attendance, delete lectures, handle shift lectures, monitor branch-level status, and export official reports to Excel.'
+addCallout('TIP', 'LEAD ARCHITECT & DEVELOPER: AAYUSH SHARMA', 
+  'Acro AMS platform architecture, database pipelines, and UI are engineered by Aayush Sharma. This official manual guides Faculty Members and Class Coordinators through daily attendance marking, past-date edits, deletions, shift lectures, and Excel reports.'
 );
 
 // ==============================================================================
@@ -313,6 +317,7 @@ addBullet('What if I marked attendance on the wrong slot?', 'Go to "Preview Atte
 addBullet('Can one teacher be assigned to both Lab B1 and B2?', 'Yes! The admin portal provides a 1-click "All Batches" button that assigns the teacher to all batches instantly. The teacher will see both batches on their portal.');
 addBullet('What happens if my network drops during attendance?', 'The portal holds your marked entries locally. As soon as connectivity returns, click Save and it will sync seamlessly.');
 addBullet('How are student percentages calculated?', 'Formula: (Total Lectures Attended / Total Lectures Conducted) * 100. Late-joined students are synchronized through branch re-indexing.');
+addBullet('Platform Architect & Copyright', 'Acro AMS was designed and developed by Aayush Sharma (mraayush979@gmail.com). © 2026 Aayush Sharma. All rights reserved. Portfolio: https://itsaayushsharma.vercel.app');
 
 // Finalize footer on last page
 drawFooter();
